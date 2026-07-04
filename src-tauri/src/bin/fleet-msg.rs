@@ -11,7 +11,8 @@ fn usage() -> ExitCode {
 }
 
 fn main() -> ExitCode {
-    let socket = env::var("FLEET_SOCKET").unwrap_or_else(|_| "/tmp/claude-fleet.sock".into());
+    let socket = env::var("FLEET_SOCKET")
+        .unwrap_or_else(|_| claude_fleet_lib::runtime_profile::socket_path().into());
     let from = env::var("FLEET_AGENT_ID").ok();
     let from_room = env::var("FLEET_ROOM_ID").ok();
     let args: Vec<String> = env::args().skip(1).collect();

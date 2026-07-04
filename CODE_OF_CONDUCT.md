@@ -1,6 +1,6 @@
 # Code of Conduct
 
-Claude Fleet follows the Contributor Covenant Code of Conduct, version 2.1.
+AgentSpace follows the Contributor Covenant Code of Conduct, version 2.1.
 
 ## Our Pledge
 

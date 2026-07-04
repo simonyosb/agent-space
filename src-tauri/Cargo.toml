@@ -1,10 +1,10 @@
 [package]
-name = "claude-fleet"
+name = "agent-space"
 version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
-default-run = "claude-fleet"
+default-run = "agent-space"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

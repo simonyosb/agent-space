@@ -1,3 +1,4 @@
+use crate::runtime_profile;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
@@ -71,6 +72,7 @@ fn run_orchestrator_chat_blocking(
 ) -> Result<CodexChatResponse, String> {
     let script = bridge_script_path()?;
     let request_id = request.request_id.clone();
+    let config_dir = runtime_profile::config_dir().ok_or_else(|| "HOME not set".to_string())?;
     let payload = serde_json::json!({
         "agentId": request.agent_id,
         "cwd": request.cwd,
@@ -78,7 +80,9 @@ fn run_orchestrator_chat_blocking(
         "systemPrompt": request.system_prompt,
         "threadId": request.thread_id,
         "mcpBinaryPath": request.mcp_binary_path,
-        "socketPath": "/tmp/claude-fleet.sock",
+        "socketPath": runtime_profile::socket_path(),
+        "profileName": runtime_profile::profile_name(),
+        "configDir": config_dir.to_string_lossy().to_string(),
     });
 
     let mut child = Command::new("node")

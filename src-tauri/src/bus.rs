@@ -1,10 +1,8 @@
-use crate::{app_state, pty::PtyRegistry};
+use crate::{app_state, pty::PtyRegistry, runtime_profile};
 use serde::Deserialize;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-
-const SOCKET_PATH: &str = "/tmp/claude-fleet.sock";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,15 +14,16 @@ struct Envelope {
 }
 
 pub fn start(registry: PtyRegistry) {
-    let _ = std::fs::remove_file(SOCKET_PATH);
-    let listener = match UnixListener::bind(Path::new(SOCKET_PATH)) {
+    let socket_path = runtime_profile::socket_path();
+    let _ = std::fs::remove_file(socket_path);
+    let listener = match UnixListener::bind(Path::new(socket_path)) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("claude-fleet: failed to bind {}: {}", SOCKET_PATH, e);
+            eprintln!("agent-space: failed to bind {}: {}", socket_path, e);
             return;
         }
     };
-    println!("claude-fleet: bus listening on {}", SOCKET_PATH);
+    println!("agent-space: bus listening on {}", socket_path);
 
     std::thread::spawn(move || {
         for stream in listener.incoming() {
@@ -33,7 +32,7 @@ pub fn start(registry: PtyRegistry) {
                     let reg = registry.clone();
                     std::thread::spawn(move || handle_conn(stream, reg));
                 }
-                Err(e) => eprintln!("claude-fleet bus accept error: {}", e),
+                Err(e) => eprintln!("agent-space bus accept error: {}", e),
             }
         }
     });

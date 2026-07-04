@@ -21,9 +21,10 @@ const linkOrCopy = (source, dest) => {
   }
 };
 
-const isolatedCodexHome = (agentId) => {
+const isolatedCodexHome = (agentId, configDir) => {
   const home = os.homedir();
-  const codexHome = path.join(home, ".claude-fleet", "agent-homes", safeName(agentId), "codex-sdk");
+  const fleetHome = configDir || path.join(home, ".agent-space");
+  const codexHome = path.join(fleetHome, "agent-homes", safeName(agentId), "codex-sdk");
   fs.mkdirSync(codexHome, { recursive: true });
 
   const sourceHome = path.join(home, ".codex");
@@ -40,11 +41,12 @@ const emit = (event) => {
 
 const main = async () => {
   const request = JSON.parse(await readStdin());
-  const codexHome = isolatedCodexHome(request.agentId);
+  const codexHome = isolatedCodexHome(request.agentId, request.configDir);
   const env = {
     ...process.env,
     CODEX_HOME: codexHome,
     FLEET_AGENT_ID: request.agentId,
+    FLEET_PROFILE: request.profileName || "production",
     FLEET_SOCKET: request.socketPath,
   };
 
@@ -52,7 +54,7 @@ const main = async () => {
     env,
     config: {
       mcp_servers: {
-        "claude-fleet": {
+        "agent-space": {
           command: request.mcpBinaryPath,
           args: [],
           env: {
@@ -76,7 +78,7 @@ const main = async () => {
     : codex.resumeThread(request.threadId, threadOptions);
 
   const prompt = isNewThread
-    ? `${request.systemPrompt}\n\nYou are the in-app orchestrator chat. Do not answer as a terminal pane. Use the claude-fleet MCP tools for durable tasks, comments, assignment, and hire requests when useful.\n\nUser:\n${request.prompt}`
+    ? `${request.systemPrompt}\n\nYou are the in-app orchestrator chat. Do not answer as a terminal pane. Use the agent-space MCP tools for durable tasks, comments, assignment, and hire requests when useful.\n\nUser:\n${request.prompt}`
     : request.prompt;
 
   const { events } = await thread.runStreamed(prompt);

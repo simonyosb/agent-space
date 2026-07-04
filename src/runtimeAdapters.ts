@@ -1,10 +1,4 @@
-export type AgentRuntime = "claude" | "codex";
-
-type RuntimeContext = {
-  mcpBinaryPath: string;
-  mcpConfigPath: string;
-  systemPrompt: (agentId: string) => string;
-};
+import type { AgentRuntime, RuntimeContext } from "./types";
 
 type RuntimeAdapter = {
   label: string;
@@ -18,13 +12,13 @@ const tomlString = (value: string): string => JSON.stringify(value);
 const codexMcpArgs = (agentId: string, context: RuntimeContext): string[] => [
   "--dangerously-bypass-approvals-and-sandbox",
   "-c",
-  `mcp_servers.claude-fleet.command=${tomlString(context.mcpBinaryPath)}`,
+  `mcp_servers.agent-space.command=${tomlString(context.mcpBinaryPath)}`,
   "-c",
-  "mcp_servers.claude-fleet.args=[]",
+  "mcp_servers.agent-space.args=[]",
   "-c",
-  `mcp_servers.claude-fleet.env.FLEET_AGENT_ID=${tomlString(agentId)}`,
+  `mcp_servers.agent-space.env.FLEET_AGENT_ID=${tomlString(agentId)}`,
   "-c",
-  `mcp_servers.claude-fleet.env.FLEET_SOCKET=${tomlString("/tmp/claude-fleet.sock")}`,
+  `mcp_servers.agent-space.env.FLEET_SOCKET=${tomlString(context.fleetSocketPath)}`,
 ];
 
 export const runtimeAdapters: Record<AgentRuntime, RuntimeAdapter> = {
@@ -39,7 +33,7 @@ export const runtimeAdapters: Record<AgentRuntime, RuntimeAdapter> = {
       context.mcpConfigPath,
     ],
     resumeArgs: (agentId, context, sessionId) => [
-      ...(sessionId ? ["--session-id", sessionId] : ["--continue"]),
+      ...(sessionId ? ["--resume", sessionId] : ["--continue"]),
       "--append-system-prompt",
       context.systemPrompt(agentId),
       "--mcp-config",

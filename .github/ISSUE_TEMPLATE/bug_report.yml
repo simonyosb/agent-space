@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible problem in Claude Fleet
+description: Report a reproducible problem in AgentSpace
 title: "Bug: "
 labels: [bug]
 body:

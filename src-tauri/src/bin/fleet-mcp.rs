@@ -34,7 +34,8 @@ fn err(id: Option<Value>, code: i32, message: &str) {
 }
 
 fn call_bus(payload: &str) -> Result<String, String> {
-    let socket = env::var("FLEET_SOCKET").unwrap_or_else(|_| "/tmp/claude-fleet.sock".into());
+    let socket = env::var("FLEET_SOCKET")
+        .unwrap_or_else(|_| claude_fleet_lib::runtime_profile::socket_path().into());
     let mut stream = UnixStream::connect(&socket).map_err(|e| e.to_string())?;
     stream
         .write_all(payload.as_bytes())
@@ -56,7 +57,7 @@ fn tools_def() -> Value {
         "tools": [
             {
                 "name": "send_message",
-                "description": "Send a message to another agent in the claude-fleet. The message will appear at the target agent's prompt prefixed with `[from <your-id>]:` and submit as a new user turn.",
+                "description": "Send a message to another agent in the agent-space. The message will appear at the target agent's prompt prefixed with `[from <your-id>]:` and submit as a new user turn.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -75,9 +76,159 @@ fn tools_def() -> Value {
                 "name": "list_messages",
                 "description": "List recent cross-agent messages. Use this as an audit trail or to recover recent handoffs.",
                 "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "list_tasks",
+                "description": "List room tasks, including subtasks, issues, comments, assignee, status, and task IDs.",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "search_tasks",
+                "description": "Search tasks by text, status, and assignee. Use before creating duplicate work.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Text to search in title, body, comments, subtasks, and issues" },
+                        "status": { "type": "string", "description": "Optional status: backlog, active, blocked, review, done" },
+                        "assignee": { "type": "string", "description": "Optional agent ID assigned to the task" },
+                        "include_done": { "type": "boolean", "description": "Include done tasks; default false" }
+                    }
+                }
+            },
+            {
+                "name": "create_task",
+                "description": "Create a room task when you find durable work, a cross-project question, or a decision that should be tracked.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "title": { "type": "string" },
+                        "body": { "type": "string" },
+                        "assignee": { "type": "string", "description": "Optional agent ID" },
+                        "acceptance_criteria": { "type": "array", "items": { "type": "string" } },
+                        "owned_files": { "type": "array", "items": { "type": "string" } },
+                        "depends_on": { "type": "array", "items": { "type": "string" } },
+                        "review_notes": { "type": "string" }
+                    },
+                    "required": ["title"]
+                }
+            },
+            {
+                "name": "update_task",
+                "description": "Update task status, assignee, title, body, acceptance criteria, or review notes.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": { "type": "string" },
+                        "title": { "type": "string" },
+                        "body": { "type": "string" },
+                        "status": { "type": "string", "description": "backlog, active, blocked, review, done" },
+                        "assignee": { "type": "string" },
+                        "acceptance_criteria": { "type": "array", "items": { "type": "string" } },
+                        "owned_files": { "type": "array", "items": { "type": "string" } },
+                        "depends_on": { "type": "array", "items": { "type": "string" } },
+                        "review_notes": { "type": "string" }
+                    },
+                    "required": ["task_id"]
+                }
+            },
+            {
+                "name": "comment_task",
+                "description": "Add an auditable comment to a task. Use this for findings, decisions, progress, questions, and handoff notes.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": { "type": "string" },
+                        "body": { "type": "string" }
+                    },
+                    "required": ["task_id", "body"]
+                }
+            },
+            {
+                "name": "create_subtask",
+                "description": "Create a subtask under an existing task for a smaller step or per-project check.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": { "type": "string" },
+                        "title": { "type": "string" },
+                        "assignee": { "type": "string", "description": "Optional agent ID" }
+                    },
+                    "required": ["task_id", "title"]
+                }
+            },
+            {
+                "name": "update_subtask",
+                "description": "Update a subtask title, status, or assignee.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": { "type": "string" },
+                        "subtask_id": { "type": "string" },
+                        "title": { "type": "string" },
+                        "status": { "type": "string", "description": "backlog, active, blocked, review, done" },
+                        "assignee": { "type": "string" }
+                    },
+                    "required": ["task_id", "subtask_id"]
+                }
+            },
+            {
+                "name": "create_issue",
+                "description": "Create an issue under a task for a bug, risk, blocker, contradiction, or finding discovered while working.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": { "type": "string" },
+                        "title": { "type": "string" },
+                        "body": { "type": "string" },
+                        "severity": { "type": "string", "description": "low, medium, high, critical" }
+                    },
+                    "required": ["task_id", "title"]
+                }
+            },
+            {
+                "name": "update_issue",
+                "description": "Update an issue title, body, severity, or status.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": { "type": "string" },
+                        "issue_id": { "type": "string" },
+                        "title": { "type": "string" },
+                        "body": { "type": "string" },
+                        "severity": { "type": "string", "description": "low, medium, high, critical" },
+                        "status": { "type": "string", "description": "open or resolved" }
+                    },
+                    "required": ["task_id", "issue_id"]
+                }
             }
         ]
     })
+}
+
+fn string_arg(arguments: &Value, name: &str) -> Option<String> {
+    arguments
+        .get(name)
+        .and_then(|v| v.as_str())
+        .map(|value| value.to_string())
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn string_array_arg(arguments: &Value, name: &str) -> Vec<String> {
+    arguments
+        .get(name)
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(|value| value.trim().to_string()))
+                .filter(|value| !value.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn actor_id() -> String {
+    env::var("FLEET_AGENT_ID").unwrap_or_else(|_| "agent".to_string())
 }
 
 fn handle(req: JsonRpcRequest) {
@@ -88,7 +239,7 @@ fn handle(req: JsonRpcRequest) {
                 json!({
                     "protocolVersion": "2024-11-05",
                     "capabilities": { "tools": {} },
-                    "serverInfo": { "name": "claude-fleet", "version": "0.1.0" }
+                    "serverInfo": { "name": "agent-space", "version": "0.1.0" }
                 }),
             );
         }
@@ -129,6 +280,138 @@ fn handle(req: JsonRpcRequest) {
                     .unwrap_or_else(|e| format!("State error: {}", e)),
                 "list_messages" => claude_fleet_lib::app_state::list_messages_for_mcp()
                     .unwrap_or_else(|e| format!("State error: {}", e)),
+                "list_tasks" => claude_fleet_lib::app_state::list_tasks_for_mcp()
+                    .unwrap_or_else(|e| format!("State error: {}", e)),
+                "search_tasks" => {
+                    let include_done = arguments
+                        .get("include_done")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    claude_fleet_lib::app_state::search_tasks_for_mcp(
+                        string_arg(&arguments, "query"),
+                        string_arg(&arguments, "status"),
+                        string_arg(&arguments, "assignee"),
+                        include_done,
+                    )
+                    .unwrap_or_else(|e| format!("State error: {}", e))
+                }
+                "create_task" => {
+                    let title = string_arg(&arguments, "title").unwrap_or_default();
+                    if title.is_empty() {
+                        err(req.id, -32602, "create_task requires 'title'");
+                        return;
+                    }
+                    claude_fleet_lib::app_state::create_task_from_mcp(
+                        title,
+                        string_arg(&arguments, "body"),
+                        string_arg(&arguments, "assignee"),
+                        None,
+                        string_array_arg(&arguments, "owned_files"),
+                        string_array_arg(&arguments, "acceptance_criteria"),
+                        string_array_arg(&arguments, "depends_on"),
+                        string_arg(&arguments, "review_notes"),
+                        None,
+                        actor_id(),
+                    )
+                    .unwrap_or_else(|e| format!("State error: {}", e))
+                }
+                "update_task" => {
+                    let task_id = string_arg(&arguments, "task_id").unwrap_or_default();
+                    if task_id.is_empty() {
+                        err(req.id, -32602, "update_task requires 'task_id'");
+                        return;
+                    }
+                    claude_fleet_lib::app_state::update_task_from_mcp(
+                        task_id,
+                        string_arg(&arguments, "title"),
+                        string_arg(&arguments, "body"),
+                        string_arg(&arguments, "status"),
+                        string_arg(&arguments, "assignee"),
+                        None,
+                        arguments.get("owned_files").map(|_| string_array_arg(&arguments, "owned_files")),
+                        arguments
+                            .get("acceptance_criteria")
+                            .map(|_| string_array_arg(&arguments, "acceptance_criteria")),
+                        arguments.get("depends_on").map(|_| string_array_arg(&arguments, "depends_on")),
+                        string_arg(&arguments, "review_notes"),
+                        None,
+                    )
+                    .unwrap_or_else(|e| format!("State error: {}", e))
+                }
+                "comment_task" => {
+                    let task_id = string_arg(&arguments, "task_id").unwrap_or_default();
+                    let body = string_arg(&arguments, "body").unwrap_or_default();
+                    if task_id.is_empty() || body.is_empty() {
+                        err(req.id, -32602, "comment_task requires 'task_id' and 'body'");
+                        return;
+                    }
+                    claude_fleet_lib::app_state::comment_task_from_mcp(task_id, body, actor_id())
+                        .unwrap_or_else(|e| format!("State error: {}", e))
+                }
+                "create_subtask" => {
+                    let task_id = string_arg(&arguments, "task_id").unwrap_or_default();
+                    let title = string_arg(&arguments, "title").unwrap_or_default();
+                    if task_id.is_empty() || title.is_empty() {
+                        err(req.id, -32602, "create_subtask requires 'task_id' and 'title'");
+                        return;
+                    }
+                    claude_fleet_lib::app_state::create_subtask_from_mcp(
+                        task_id,
+                        title,
+                        string_arg(&arguments, "assignee"),
+                        actor_id(),
+                    )
+                    .unwrap_or_else(|e| format!("State error: {}", e))
+                }
+                "update_subtask" => {
+                    let task_id = string_arg(&arguments, "task_id").unwrap_or_default();
+                    let subtask_id = string_arg(&arguments, "subtask_id").unwrap_or_default();
+                    if task_id.is_empty() || subtask_id.is_empty() {
+                        err(req.id, -32602, "update_subtask requires 'task_id' and 'subtask_id'");
+                        return;
+                    }
+                    claude_fleet_lib::app_state::update_subtask_from_mcp(
+                        task_id,
+                        subtask_id,
+                        string_arg(&arguments, "title"),
+                        string_arg(&arguments, "status"),
+                        string_arg(&arguments, "assignee"),
+                    )
+                    .unwrap_or_else(|e| format!("State error: {}", e))
+                }
+                "create_issue" => {
+                    let task_id = string_arg(&arguments, "task_id").unwrap_or_default();
+                    let title = string_arg(&arguments, "title").unwrap_or_default();
+                    if task_id.is_empty() || title.is_empty() {
+                        err(req.id, -32602, "create_issue requires 'task_id' and 'title'");
+                        return;
+                    }
+                    claude_fleet_lib::app_state::create_issue_from_mcp(
+                        task_id,
+                        title,
+                        string_arg(&arguments, "body"),
+                        string_arg(&arguments, "severity"),
+                        actor_id(),
+                    )
+                    .unwrap_or_else(|e| format!("State error: {}", e))
+                }
+                "update_issue" => {
+                    let task_id = string_arg(&arguments, "task_id").unwrap_or_default();
+                    let issue_id = string_arg(&arguments, "issue_id").unwrap_or_default();
+                    if task_id.is_empty() || issue_id.is_empty() {
+                        err(req.id, -32602, "update_issue requires 'task_id' and 'issue_id'");
+                        return;
+                    }
+                    claude_fleet_lib::app_state::update_issue_from_mcp(
+                        task_id,
+                        issue_id,
+                        string_arg(&arguments, "title"),
+                        string_arg(&arguments, "body"),
+                        string_arg(&arguments, "severity"),
+                        string_arg(&arguments, "status"),
+                    )
+                    .unwrap_or_else(|e| format!("State error: {}", e))
+                }
                 _ => {
                     err(req.id, -32601, &format!("Unknown tool: {}", name));
                     return;

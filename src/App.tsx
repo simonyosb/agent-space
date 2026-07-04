@@ -1,137 +1,47 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { TerminalPane } from "./components/TerminalPane";
-import { AgentRuntime, runtimeAdapters } from "./runtimeAdapters";
+import { systemPromptFor } from "./agentPrompts";
+import { formatTime, scopedAgentId, shortPath } from "./bridgeUtils";
+import { ProjectAgentPane, type AgentPaneSize } from "./components/agents/ProjectAgentPane";
+import { QuickOpen, QuickOpenEntry } from "./components/shell/QuickOpen";
+import type {
+  AgentPaneStatus,
+  AgentRecord,
+  AgentRuntime,
+  AutomationRecord,
+  AutomationRunRecord,
+  FleetState,
+  LegacyTaskRecord,
+  MessageRecord,
+  ProjectWorkspace,
+  PtyStatus,
+  RoomRecord,
+  RuntimeContext,
+  TaskStatus,
+  TranscriptMessageRecord,
+} from "./types";
 import "./App.css";
 
 void React;
 
-type ProjectWorkspace = {
-  id: string;
-  name: string;
-  path: string;
-  createdAt: string;
-};
-
-type AgentRecord = {
-  id: string;
-  label: string;
-  accentColor: string | null;
-  title: string | null;
-  runtime: AgentRuntime;
-  role: string;
-  reportsTo: string | null;
-  capabilities: string | null;
-  cwd: string | null;
-  worktree: string | null;
-  instructions: string | null;
-  instructionsBundle: { files: Record<string, string> } | null;
-  runtimeConfig: Record<string, unknown>;
-  permissions: {
-    canCreateAgents: boolean;
-    canManageTasks: boolean;
-  };
-  sourceTaskId: string | null;
-  sessionId: string | null;
-  status: string;
-};
-
-type MessageRecord = {
-  id: string;
-  from: string;
-  to: string;
-  body: string;
-  createdAt: string;
-};
-
-type ClaudeTranscriptMessage = {
-  id: string;
-  role: string;
-  body: string;
-  createdAt: string | null;
-};
-
-type ClaudeTranscript = {
-  sessionId: string | null;
-  sessionPath: string | null;
-  updatedAt: string | null;
-  messages: ClaudeTranscriptMessage[];
-};
-
-type ClaudeTranscriptEvent = {
-  agentId: string;
-  transcript: ClaudeTranscript;
-};
-
-type ClaudeTranscriptErrorEvent = {
-  agentId: string;
-  error: string;
-};
-
-type LegacyTaskRecord = {
-  id: string;
-  title: string;
-  body: string;
-  status: string;
-  assignee: string | null;
-  comments: unknown[];
-  createdAt: string;
-  updatedAt: string;
-};
-
-type RoomRecord = {
-  id: string;
-  workspace: ProjectWorkspace;
-  mainAgentId: string | null;
-  agents: AgentRecord[];
-  tasks: LegacyTaskRecord[];
-  orchestratorChat: unknown[];
-  messages: MessageRecord[];
-  runs: unknown[];
-  workspaces: unknown[];
-  selectedAgentId: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type FleetState = {
-  schemaVersion: number;
-  activeRoomId: string | null;
-  rooms: RoomRecord[];
-  activeWorkspace: ProjectWorkspace | null;
-  mainAgentId: string | null;
-  agents: AgentRecord[];
-  tasks: LegacyTaskRecord[];
-  orchestratorChat: unknown[];
-  messages: MessageRecord[];
-  runs: unknown[];
-  workspaces: unknown[];
-};
-
-type RuntimeContext = {
-  mcpBinaryPath: string;
-  mcpConfigPath: string;
-  systemPrompt: (agentId: string) => string;
-};
-
 const agentColors = [
-  "#d6d876",
-  "#4ebe96",
-  "#62a8ff",
-  "#b58cff",
-  "#f08b52",
-  "#f06f8f",
-  "#66d9e8",
-  "#c9a66b",
+  "#e5e5e5",
+  "#86efac",
+  "#93c5fd",
+  "#c4b5fd",
+  "#fbbf24",
+  "#fca5a5",
+  "#67e8f9",
+  "#d6d3d1",
 ];
 
 const encode = (data: string) => Array.from(new TextEncoder().encode(data));
 const defaultAgentColor = (index: number) => agentColors[index % agentColors.length];
 const hasTauriBridge = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-const scopedAgentId = (roomId: string | null | undefined, agentId: string) =>
-  roomId ? `${roomId}:${agentId}` : agentId;
 const sessionIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const taskStatuses: TaskStatus[] = ["backlog", "active", "blocked", "review", "done"];
+const paneSizeStorageKey = "agentspace:pane-sizes";
+const previewStateStorageKey = "agentspace:preview-fleet-state";
 const createSessionId = () =>
   globalThis.crypto?.randomUUID?.() ??
   "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (char) =>
@@ -151,33 +61,68 @@ const nextId = (prefix: string, existingIds: string[]) => {
 const projectNameFromPath = (path: string) =>
   path.trim().split("/").filter(Boolean).pop() || "project";
 
-const shortPath = (path: string | null | undefined) => {
-  if (!path) return "No project path";
-  const parts = path.split("/").filter(Boolean);
-  if (parts.length <= 3) return path;
-  return `.../${parts.slice(-3).join("/")}`;
-};
-
-const formatTime = (value: string) => {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-};
-
-const toolEventName = (body: string) => {
-  const match = body.trim().match(/^\[tool:\s*([^\]]+)\]$/);
-  return match?.[1] ?? null;
-};
-
 const sameFleetState = (a: FleetState | null, b: FleetState) => {
   if (!a) return false;
   return JSON.stringify(a) === JSON.stringify(b);
 };
 
+const loadPaneSizes = (): Record<string, AgentPaneSize> => {
+  if (typeof window === "undefined") return {};
+  try {
+    const stored = window.localStorage.getItem(paneSizeStorageKey);
+    if (!stored) return {};
+    const parsed = JSON.parse(stored) as Record<string, Partial<AgentPaneSize>>;
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter(([, size]) => Number.isFinite(size.width) && Number.isFinite(size.height))
+        .map(([key, size]) => [
+          key,
+          {
+            width: Math.max(280, Math.round(size.width ?? 0)),
+            height: Math.max(240, Math.round(size.height ?? 0)),
+          },
+        ]),
+    );
+  } catch {
+    return {};
+  }
+};
+
+const isTaskStatus = (status: string): status is TaskStatus =>
+  taskStatuses.includes(status as TaskStatus);
+
+const normalizeStatus = (status: string | undefined): TaskStatus => {
+  if (!status) return "backlog";
+  if (status === "todo") return "backlog";
+  if (status === "in-progress") return "active";
+  if (status === "in-review") return "review";
+  if (status === "complete" || status === "completed") return "done";
+  return isTaskStatus(status) ? status : "backlog";
+};
+
+const uniqueValues = <T,>(values: T[]) => Array.from(new Set(values));
+
+const taskReplyIds = (body: string, knownTaskIds: Set<string>) => {
+  const found = new Set<string>();
+  const tagPattern = /\[task:\s*([a-z0-9_-]+)\]/gi;
+  let match: RegExpExecArray | null;
+  while ((match = tagPattern.exec(body)) !== null) {
+    if (knownTaskIds.has(match[1])) found.add(match[1]);
+  }
+  return [...found];
+};
+
+const snippetTitle = (body: string) => {
+  const collapsed = body.replace(/\s+/g, " ").trim();
+  if (!collapsed) return "Follow up on message";
+  return collapsed.length > 64 ? `${collapsed.slice(0, 61)}...` : collapsed;
+};
+
 const previewFleetState = (): FleetState => ({
-  schemaVersion: 4,
+  schemaVersion: 5,
   activeRoomId: "preview-room",
   rooms: [],
+  roomOrder: [],
   activeWorkspace: {
     id: "preview-room",
     name: "microservices",
@@ -230,12 +175,23 @@ const previewFleetState = (): FleetState => ({
     },
   ],
   runs: [],
+  automations: [],
+  automationRuns: [],
   workspaces: [],
 });
 
 const previewStore = () => {
-  const previewWindow = window as Window & { __CLAUDE_FLEET_PREVIEW_STATE__?: FleetState };
-  previewWindow.__CLAUDE_FLEET_PREVIEW_STATE__ ??= previewFleetState();
+  const previewWindow = window as Window & { __AGENT_SPACE_PREVIEW_STATE__?: FleetState };
+  if (!previewWindow.__AGENT_SPACE_PREVIEW_STATE__) {
+    try {
+      const stored = window.localStorage.getItem(previewStateStorageKey);
+      previewWindow.__AGENT_SPACE_PREVIEW_STATE__ = stored
+        ? normalizeLoadedState(JSON.parse(stored) as FleetState)
+        : previewFleetState();
+    } catch {
+      previewWindow.__AGENT_SPACE_PREVIEW_STATE__ = previewFleetState();
+    }
+  }
   return previewWindow;
 };
 
@@ -247,15 +203,18 @@ async function appInvoke<T>(cmd: string, args?: Record<string, unknown>): Promis
   const previewWindow = previewStore();
   switch (cmd) {
     case "get_mcp_config_path":
-      return "~/.claude-fleet/mcp.json" as T;
+      return "~/.agent-space-dev/mcp.json" as T;
     case "get_fleet_mcp_binary_path":
-      return "/Users/zeemon/Development/claude-fleet/src-tauri/target/debug/fleet-mcp" as T;
+      return "/Users/zeemon/Development/agent-space/src-tauri/target/debug/fleet-mcp" as T;
+    case "get_fleet_socket_path":
+      return "/tmp/agent-space-dev.sock" as T;
     case "get_mailbox_root":
-      return "~/.claude-fleet/mail" as T;
+      return "~/.agent-space-dev/mail" as T;
     case "load_fleet_state":
-      return previewWindow.__CLAUDE_FLEET_PREVIEW_STATE__ as T;
+      return previewWindow.__AGENT_SPACE_PREVIEW_STATE__ as T;
     case "save_fleet_state":
-      previewWindow.__CLAUDE_FLEET_PREVIEW_STATE__ = args?.state as FleetState;
+      previewWindow.__AGENT_SPACE_PREVIEW_STATE__ = args?.state as FleetState;
+      window.localStorage.setItem(previewStateStorageKey, JSON.stringify(args?.state));
       return undefined as T;
     case "open_project_workspace":
     case "create_project_workspace": {
@@ -295,6 +254,15 @@ async function appInvoke<T>(cmd: string, args?: Record<string, unknown>): Promis
           },
         ],
       } as T;
+    case "get_pty_status":
+      return {
+        id: String(args?.id ?? ""),
+        exists: false,
+        exited: false,
+        bufferLen: 0,
+      } as T;
+    case "list_pty_statuses":
+      return [] as T;
     case "write_pty":
     case "watch_claude_transcript":
     case "stop_claude_transcript_watch":
@@ -306,40 +274,20 @@ async function appInvoke<T>(cmd: string, args?: Record<string, unknown>): Promis
 }
 
 const hasUsableSession = (agent: AgentRecord) => {
+  if (agent.runtime === "codex") return agent.status === "session-started";
   return Boolean(agent.sessionId && agent.status === "session-started");
 };
 
-const systemPromptFor = (agent: AgentRecord, agents: AgentRecord[]) => {
-  const peers = agents
-    .filter((peer) => peer.id !== agent.id)
-    .map((peer) => `- ${peer.id}: ${peer.label} (${peer.role}) at ${peer.cwd ?? "unknown cwd"}`)
-    .join("\n");
-
-  return `You are a long-lived project-local Claude Fleet agent.
-
-Your agent ID is "${agent.id}".
-Your display name is "${agent.label}".
-Your project directory is "${agent.cwd ?? "unknown"}".
-Your local expertise is "${agent.role}".
-${agent.capabilities ? `Your expertise notes:\n${agent.capabilities}\n` : ""}
-${agent.instructions ? `Standing instructions:\n${agent.instructions}\n` : ""}
-
-This system is context federation, not shared context. Keep the details of your own project in your own context window. When another agent asks about your project, investigate locally and send back only the useful conclusion, contract, file reference, risk, or decision.
-
-Available peer agents:
-${peers || "- none yet"}
-
-Use the claude-fleet MCP tools:
-- list_agents: discover peer agents, their roles, and project directories
-- send_message(to, body): send a concise message to another agent
-- list_messages: inspect recent cross-agent messages
-
-Every message is also written to plain JSON mailbox files under ~/.claude-fleet/mail:
-- messages/<message-id>.json is the global ledger
-- agents/<agent-id>/inbox/<message-id>.json is recipient mail
-- agents/<agent-id>/outbox/<message-id>.json is sender mail
-
-When you receive a turn beginning with "[from <sender>]:", it came from another agent. Reply with send_message(to=<sender>, body=<your answer>) when a reply is useful. Do not paste huge files or raw context across the wire. Send understanding, not libraries.`;
+const agentPaneStatus = (
+  agent: AgentRecord,
+  ptyId: string,
+  ptyStatuses: Record<string, PtyStatus>,
+): AgentPaneStatus => {
+  const ptyStatus = ptyStatuses[ptyId];
+  if (ptyStatus?.exists && ptyStatus.exited) return "exited";
+  if (ptyStatus?.exists) return "live";
+  if (hasUsableSession(agent)) return "resume";
+  return "ready";
 };
 
 function createAgent({
@@ -373,7 +321,7 @@ function createAgent({
     runtimeConfig: { heartbeat: { enabled: false, wakeOnDemand: true } },
     permissions: { canCreateAgents: false, canManageTasks: false },
     sourceTaskId: null,
-    sessionId: createSessionId(),
+    sessionId: runtime === "claude" ? null : createSessionId(),
     status: "idle",
   };
 }
@@ -383,6 +331,7 @@ function App() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [mcpConfigPath, setMcpConfigPath] = useState<string | null>(null);
   const [mcpBinaryPath, setMcpBinaryPath] = useState<string | null>(null);
+  const [fleetSocketPath, setFleetSocketPath] = useState<string | null>(null);
   const [setupPath, setSetupPath] = useState("");
   const [setupName, setSetupName] = useState("");
   const [setupError, setSetupError] = useState<string | null>(null);
@@ -392,24 +341,35 @@ function App() {
   const [newAgentRuntime, setNewAgentRuntime] = useState<AgentRuntime>("claude");
   const [isAddAgentOpen, setIsAddAgentOpen] = useState(false);
   const [isEditAgentOpen, setIsEditAgentOpen] = useState(false);
+  const [isAgentDetailsOpen, setIsAgentDetailsOpen] = useState(false);
+  const [isWorkspaceModalOpen, setIsWorkspaceModalOpen] = useState(false);
+  const [isQuickOpenOpen, setIsQuickOpenOpen] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [manualMessage, setManualMessage] = useState("");
   const [manualRecipient, setManualRecipient] = useState("");
   const [manualError, setManualError] = useState<string | null>(null);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [mailboxRoot, setMailboxRoot] = useState<string | null>(null);
+  const [ptyStatuses, setPtyStatuses] = useState<Record<string, PtyStatus>>({});
+  const [agentPaneSizes, setAgentPaneSizes] = useState<Record<string, AgentPaneSize>>(loadPaneSizes);
+  const [draggingAgentId, setDraggingAgentId] = useState<string | null>(null);
+  const [dragOverAgentId, setDragOverAgentId] = useState<string | null>(null);
+  const [draggingWorkspaceId, setDraggingWorkspaceId] = useState<string | null>(null);
+  const [dragOverWorkspaceId, setDragOverWorkspaceId] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
       appInvoke<string>("get_mcp_config_path"),
       appInvoke<string>("get_fleet_mcp_binary_path"),
+      appInvoke<string>("get_fleet_socket_path"),
       appInvoke<string>("get_mailbox_root"),
       appInvoke<FleetState>("load_fleet_state"),
     ])
-      .then(([configPath, binaryPath, mailboxPath, loadedState]) => {
+      .then(([configPath, binaryPath, socketPath, mailboxPath, loadedState]) => {
         const state = normalizeLoadedState(loadedState);
         setMcpConfigPath(configPath);
         setMcpBinaryPath(binaryPath);
+        setFleetSocketPath(socketPath);
         setMailboxRoot(mailboxPath);
         setFleetState(state);
         const initialAgentId =
@@ -436,6 +396,32 @@ function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    const refreshPtyStatuses = () => {
+      appInvoke<PtyStatus[]>("list_pty_statuses")
+        .then((statuses) => {
+          if (cancelled) return;
+          setPtyStatuses(Object.fromEntries(statuses.map((status) => [status.id, status])));
+        })
+        .catch((error) => console.error("Failed to refresh PTY statuses:", error));
+    };
+    refreshPtyStatuses();
+    const interval = window.setInterval(refreshPtyStatuses, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(paneSizeStorageKey, JSON.stringify(agentPaneSizes));
+    } catch (error) {
+      console.error("Failed to save pane sizes:", error);
+    }
+  }, [agentPaneSizes]);
+
+  useEffect(() => {
     if (!isAddAgentOpen && !isEditAgentOpen && !isFocusMode) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -448,17 +434,30 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isAddAgentOpen, isEditAgentOpen, isFocusMode]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const isQuickOpenShortcut = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
+      if (!isQuickOpenShortcut) return;
+      event.preventDefault();
+      setIsQuickOpenOpen(true);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   const runtimeContext = useMemo<RuntimeContext | null>(() => {
-    if (!mcpBinaryPath || !mcpConfigPath || !fleetState) return null;
+    if (!mcpBinaryPath || !mcpConfigPath || !fleetSocketPath || !fleetState) return null;
     return {
       mcpBinaryPath,
       mcpConfigPath,
+      fleetSocketPath,
+      mailboxRoot,
       systemPrompt: (agentId) => {
         const agent = fleetState.agents.find((item) => item.id === agentId);
-        return agent ? systemPromptFor(agent, fleetState.agents) : agentId;
+        return agent ? systemPromptFor(agent, fleetState.agents, mailboxRoot) : agentId;
       },
     };
-  }, [fleetState, mcpBinaryPath, mcpConfigPath]);
+  }, [fleetState, fleetSocketPath, mailboxRoot, mcpBinaryPath, mcpConfigPath]);
 
   const saveState = (nextState: FleetState, selectedAgentOverride = selectedAgentId) => {
     const normalized = persistActiveRoom(normalizeLoadedState(nextState), selectedAgentOverride);
@@ -466,6 +465,24 @@ function App() {
     appInvoke("save_fleet_state", { state: normalized }).catch((error) =>
       console.error("Failed to save fleet state:", error),
     );
+  };
+
+  const appendMessagesToState = (messages: MessageRecord[]) => {
+    if (messages.length === 0) return;
+    setFleetState((current) => {
+      if (!current) return current;
+      const existingIds = new Set(current.messages.map((message) => message.id));
+      const newMessages = messages.filter((message) => !existingIds.has(message.id));
+      if (newMessages.length === 0) return current;
+      const normalized = persistActiveRoom(normalizeLoadedState({
+        ...current,
+        messages: [...newMessages, ...current.messages],
+      }), selectedAgentId);
+      appInvoke("save_fleet_state", { state: normalized }).catch((error) =>
+        console.error("Failed to append messages:", error),
+      );
+      return normalized;
+    });
   };
 
   const activateWorkspace = (workspace: ProjectWorkspace) => {
@@ -496,10 +513,12 @@ function App() {
       cwd: workspace.path,
       index: 0,
     });
+    const savedState = fleetState ? persistActiveRoom(normalizeLoadedState(fleetState), selectedAgentId) : null;
     const nextState: FleetState = {
-      schemaVersion: 4,
+      schemaVersion: 5,
       activeRoomId: workspace.id,
-      rooms: fleetState ? persistActiveRoom(normalizeLoadedState(fleetState), selectedAgentId).rooms : [],
+      rooms: savedState?.rooms ?? [],
+      roomOrder: savedState?.roomOrder ?? [],
       activeWorkspace: workspace,
       mainAgentId: firstAgent.id,
       agents: [firstAgent],
@@ -507,6 +526,8 @@ function App() {
       orchestratorChat: [],
       messages: [],
       runs: [],
+      automations: [],
+      automationRuns: [],
       workspaces: [],
     };
     saveState(nextState, firstAgent.id);
@@ -530,12 +551,56 @@ function App() {
     setIsEditAgentOpen(false);
   };
 
-  const startNewRoom = () => {
+  const openAddAgentForRoom = (roomId: string) => {
+    if (!fleetState) return;
+    const room = fleetState.rooms.find((item) => item.id === roomId);
+    if (!room) return;
+    if (room.id !== fleetState.activeRoomId) switchRoom(room.id);
+    setNewAgentPath(room.workspace.path);
+    setIsFocusMode(false);
+    setIsAddAgentOpen(true);
+  };
+
+  const removeWorkspace = (roomId: string) => {
     if (!fleetState) return;
     const currentState = persistActiveRoom(normalizeLoadedState(fleetState), selectedAgentId);
+    const room = currentState.rooms.find((item) => item.id === roomId);
+    if (!room) return;
+    const confirmed = window.confirm(
+      `Remove "${room.workspace.name}" from AgentSpace? This only removes the saved workspace, agents, and messages. Project files stay untouched.`,
+    );
+    if (!confirmed) return;
+
+    const remainingRooms = currentState.rooms.filter((item) => item.id !== roomId);
+    const remainingRoomOrder = currentState.roomOrder.filter((id) => id !== roomId);
+    if (currentState.activeRoomId !== roomId) {
+      saveState({ ...currentState, rooms: remainingRooms, roomOrder: remainingRoomOrder });
+      return;
+    }
+
+    const nextRoom = remainingRooms[0] ?? null;
+    if (nextRoom) {
+      const nextState = applyRoomToState({
+        ...currentState,
+        rooms: remainingRooms,
+        roomOrder: remainingRoomOrder,
+      }, nextRoom);
+      const nextSelectedAgentId = nextRoom.selectedAgentId ?? nextState.mainAgentId ?? nextState.agents[0]?.id ?? null;
+      saveState(nextState, nextSelectedAgentId);
+      setSelectedAgentId(nextSelectedAgentId);
+      setManualRecipient(nextSelectedAgentId ?? "");
+      setNewAgentPath(nextState.activeWorkspace?.path ?? "");
+      setIsFocusMode(false);
+      setIsEditAgentOpen(false);
+      setIsAddAgentOpen(false);
+      return;
+    }
+
     const nextState = normalizeLoadedState({
       ...currentState,
       activeRoomId: null,
+      rooms: [],
+      roomOrder: [],
       activeWorkspace: null,
       mainAgentId: null,
       agents: [],
@@ -543,14 +608,30 @@ function App() {
       orchestratorChat: [],
       messages: [],
       runs: [],
+      automations: [],
+      automationRuns: [],
       workspaces: [],
     });
-    saveState(nextState);
+    saveState(nextState, null);
     setSelectedAgentId(null);
     setManualRecipient("");
+    setNewAgentPath("");
     setSetupPath("");
     setSetupName("");
     setIsFocusMode(false);
+    setIsEditAgentOpen(false);
+    setIsAddAgentOpen(false);
+  };
+
+  const startNewRoom = () => {
+    if (!fleetState) return;
+    const currentState = persistActiveRoom(normalizeLoadedState(fleetState), selectedAgentId);
+    saveState(currentState);
+    setSetupPath("");
+    setSetupName("");
+    setSetupError(null);
+    setIsFocusMode(false);
+    setIsWorkspaceModalOpen(true);
   };
 
   const openWorkspace = async () => {
@@ -565,6 +646,7 @@ function App() {
         ...workspace,
         name: setupName.trim() || workspace.name,
       });
+      setIsWorkspaceModalOpen(false);
     } catch (error) {
       setSetupError(String(error));
     }
@@ -582,6 +664,7 @@ function App() {
         name: setupName || null,
       });
       activateWorkspace(workspace);
+      setIsWorkspaceModalOpen(false);
     } catch (error) {
       setSetupError(String(error));
     }
@@ -590,7 +673,7 @@ function App() {
   const browseSetupPath = async () => {
     try {
       const selected = await appInvoke<string | string[] | null>("plugin:dialog|open", {
-        options: { directory: true, multiple: false, title: "Choose fleet home project" },
+        options: { directory: true, multiple: false, title: "Choose workspace project" },
       });
       if (typeof selected === "string") setSetupPath(selected);
     } catch (error) {
@@ -659,23 +742,113 @@ function App() {
     setManualRecipient(agents[0]?.id ?? "");
   };
 
-  const markAgentSessionStarted = (id: string) => {
+  const prepareClaudeSession = (id: string) => {
     setFleetState((current) => {
       if (!current) return current;
       const existing = current.agents.find((agent) => agent.id === id);
-      if (!existing || existing.status === "session-started") return current;
+      if (!existing || existing.runtime !== "claude" || existing.sessionId) return current;
       const normalized = persistActiveRoom(normalizeLoadedState({
         ...current,
         agents: current.agents.map((agent) =>
           agent.id === id
-            ? { ...agent, sessionId: agent.sessionId ?? createSessionId(), status: "session-started" }
+            ? { ...agent, sessionId: createSessionId(), status: "idle" }
             : agent,
         ),
       }), selectedAgentId);
       appInvoke("save_fleet_state", { state: normalized }).catch((error) =>
-        console.error("Failed to save agent session marker:", error),
+        console.error("Failed to save prepared Claude session:", error),
       );
       return normalized;
+    });
+  };
+
+  const markAgentTerminalStarted = (id: string) => {
+    setFleetState((current) => {
+      if (!current) return current;
+      const existing = current.agents.find((agent) => agent.id === id);
+      if (!existing || existing.status === "session-started" || existing.status === "terminal-started") {
+        return current;
+      }
+      const normalized = persistActiveRoom(normalizeLoadedState({
+        ...current,
+        agents: current.agents.map((agent) =>
+          agent.id === id
+            ? {
+                ...agent,
+                sessionId: agent.runtime === "claude" ? agent.sessionId ?? createSessionId() : agent.sessionId,
+                status: agent.runtime === "codex" ? "session-started" : "terminal-started",
+              }
+            : agent,
+        ),
+      }), selectedAgentId);
+      appInvoke("save_fleet_state", { state: normalized }).catch((error) =>
+        console.error("Failed to save agent terminal marker:", error),
+      );
+      return normalized;
+    });
+  };
+
+  const markAgentTranscriptSession = (id: string, sessionId: string) => {
+    if (!sessionIdPattern.test(sessionId)) return;
+    setFleetState((current) => {
+      if (!current) return current;
+      const existing = current.agents.find((agent) => agent.id === id);
+      if (!existing) return current;
+      if (existing.sessionId === sessionId && existing.status === "session-started") return current;
+      const normalized = persistActiveRoom(normalizeLoadedState({
+        ...current,
+        agents: current.agents.map((agent) =>
+          agent.id === id
+            ? { ...agent, sessionId, status: "session-started" }
+            : agent,
+        ),
+      }), selectedAgentId);
+      appInvoke("save_fleet_state", { state: normalized }).catch((error) =>
+        console.error("Failed to save Claude transcript session:", error),
+      );
+      return normalized;
+    });
+  };
+
+  const restartAgentFresh = async (id: string, ptyId: string) => {
+    try {
+      await appInvoke("kill_pty", { id: ptyId });
+    } catch (error) {
+      console.error("Failed to stop agent before fresh restart:", error);
+    }
+    setFleetState((current) => {
+      if (!current) return current;
+      const existing = current.agents.find((agent) => agent.id === id);
+      if (!existing) return current;
+      const normalized = persistActiveRoom(normalizeLoadedState({
+        ...current,
+        agents: current.agents.map((agent) =>
+          agent.id === id
+            ? { ...agent, sessionId: createSessionId(), status: "idle" }
+            : agent,
+        ),
+      }), selectedAgentId);
+      appInvoke("save_fleet_state", { state: normalized }).catch((error) =>
+        console.error("Failed to save fresh session marker:", error),
+      );
+      return normalized;
+    });
+  };
+
+  const writePromptToAgent = async (agentId: string, message: string) => {
+    if (!fleetState) throw new Error("No active fleet state.");
+    const body = `[from human]: ${message}`;
+    const targetPtyId = scopedAgentId(fleetState.activeRoomId ?? fleetState.activeWorkspace?.id, agentId);
+    await appInvoke("write_pty", { id: targetPtyId, data: encode(body) });
+    window.setTimeout(() => {
+      appInvoke("write_pty", { id: targetPtyId, data: encode("\r") }).catch((error) =>
+        console.error("Failed to submit message:", error),
+      );
+    }, 250);
+    return appInvoke<MessageRecord>("record_manual_message", {
+      from: "human",
+      to: agentId,
+      body: message,
     });
   };
 
@@ -685,21 +858,9 @@ function App() {
     setManualError(null);
     setIsSendingMessage(true);
     try {
-      const body = `[from human]: ${trimmedMessage}`;
-      const targetPtyId = scopedAgentId(fleetState?.activeRoomId ?? fleetState?.activeWorkspace?.id, manualRecipient);
-      await appInvoke("write_pty", { id: targetPtyId, data: encode(body) });
-      window.setTimeout(() => {
-        appInvoke("write_pty", { id: targetPtyId, data: encode("\r") }).catch((error) =>
-          console.error("Failed to submit manual message:", error),
-        );
-      }, 250);
       if (fleetState) {
-        const message = await appInvoke<MessageRecord>("record_manual_message", {
-          from: "human",
-          to: manualRecipient,
-          body: trimmedMessage,
-        });
-        saveState({ ...fleetState, messages: [message, ...fleetState.messages] });
+        const message = await writePromptToAgent(manualRecipient, trimmedMessage);
+        appendMessagesToState([message]);
       }
       setManualMessage("");
     } catch (error) {
@@ -709,14 +870,263 @@ function App() {
     }
   };
 
+  const sendAgentMessage = async (agentId: string, body: string) => {
+    if (!fleetState) throw new Error("No active fleet state.");
+    const message = await writePromptToAgent(agentId, body);
+    appendMessagesToState([message]);
+  };
+
+  const recordTranscriptTaskMessages = useCallback((
+    agentId: string,
+    transcriptMessages: TranscriptMessageRecord[],
+  ) => {
+    setFleetState((current) => {
+      if (!current) return current;
+      const knownTaskIds = new Set(current.tasks.map((task) => task.id));
+      const existingMessageIds = new Set(current.messages.map((message) => message.id));
+      const agent = current.agents.find((item) => item.id === agentId);
+      const records: Array<{ message: MessageRecord; taskIds: string[] }> = [];
+
+      for (const transcriptMessage of transcriptMessages) {
+        if (transcriptMessage.role !== "assistant") continue;
+        const taskIds = taskReplyIds(transcriptMessage.body, knownTaskIds);
+        if (taskIds.length === 0) continue;
+        const messageId = `transcript:${agentId}:${transcriptMessage.id}`;
+        records.push({
+          message: {
+            id: messageId,
+            from: agentId,
+            to: "task",
+            body: transcriptMessage.body,
+            createdAt: transcriptMessage.createdAt ?? new Date().toISOString(),
+          },
+          taskIds,
+        });
+      }
+
+      if (records.length === 0) return current;
+
+      let changed = false;
+      const newMessages = records
+        .map((record) => record.message)
+        .filter((message) => {
+          if (existingMessageIds.has(message.id)) return false;
+          changed = true;
+          existingMessageIds.add(message.id);
+          return true;
+        });
+
+      const nextTasks = current.tasks.map((task) => {
+        const taskRecords = records.filter((record) => record.taskIds.includes(task.id));
+        if (taskRecords.length === 0) return task;
+
+        const newLinkedMessages = taskRecords
+          .map((record) => record.message.id)
+          .filter((messageId) => !task.linkedMessageIds.includes(messageId));
+        if (newLinkedMessages.length === 0) return task;
+
+        changed = true;
+        const comments = taskRecords
+          .filter((record) => newLinkedMessages.includes(record.message.id))
+          .map((record) => ({
+            id: `comment-${record.message.id}`,
+            author: agent?.label ?? agentId,
+            body: `Replied: ${snippetTitle(record.message.body)}`,
+            createdAt: record.message.createdAt,
+          }));
+        const lastActivityAt = comments[0]?.createdAt ?? new Date().toISOString();
+
+        return {
+          ...task,
+          status: task.status === "backlog" || task.status === "active" ? "review" : task.status,
+          linkedMessageIds: uniqueValues([...task.linkedMessageIds, ...newLinkedMessages]),
+          activeAgentIds: uniqueValues([...task.activeAgentIds, agentId]),
+          comments: [...comments, ...task.comments],
+          lastAgentActivityAt: lastActivityAt,
+          updatedAt: lastActivityAt,
+        };
+      });
+
+      if (!changed) return current;
+
+      const normalized = persistActiveRoom(normalizeLoadedState({
+        ...current,
+        messages: [...newMessages, ...current.messages],
+        tasks: nextTasks,
+      }), selectedAgentId);
+      appInvoke("save_fleet_state", { state: normalized }).catch((error) =>
+        console.error("Failed to save task transcript activity:", error),
+      );
+      return normalized;
+    });
+  }, [selectedAgentId]);
+
   const ready = fleetState !== null && runtimeContext !== null;
   const selectedAgent =
     fleetState?.agents.find((agent) => agent.id === selectedAgentId) ?? fleetState?.agents[0] ?? null;
+  const visibleAgents = fleetState?.agents ?? [];
   const selectAgent = (id: string) => {
     setSelectedAgentId(id);
     setManualRecipient(id);
     setIsEditAgentOpen(false);
   };
+  const openAgentDetails = (id: string) => {
+    selectAgent(id);
+    setIsAgentDetailsOpen(true);
+  };
+  const resizeAgentPane = useCallback((paneKey: string, size: AgentPaneSize | null) => {
+    setAgentPaneSizes((current) => {
+      if (!size) {
+        const { [paneKey]: _removed, ...rest } = current;
+        return rest;
+      }
+      return {
+        ...current,
+        [paneKey]: size,
+      };
+    });
+  }, []);
+  const moveAgentPane = useCallback((draggedId: string, targetId: string) => {
+    setFleetState((current) => {
+      if (!current || draggedId === targetId) return current;
+      const fromIndex = current.agents.findIndex((agent) => agent.id === draggedId);
+      const toIndex = current.agents.findIndex((agent) => agent.id === targetId);
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return current;
+      const agents = [...current.agents];
+      const [draggedAgent] = agents.splice(fromIndex, 1);
+      agents.splice(toIndex, 0, draggedAgent);
+      const normalized = persistActiveRoom(normalizeLoadedState({ ...current, agents }), selectedAgentId);
+      appInvoke("save_fleet_state", { state: normalized }).catch((error) =>
+        console.error("Failed to save agent pane order:", error),
+      );
+      return normalized;
+    });
+    setDragOverAgentId(targetId);
+  }, [selectedAgentId]);
+  const finishAgentPaneDrag = useCallback(() => {
+    setDraggingAgentId(null);
+    setDragOverAgentId(null);
+    setFleetState((current) => {
+      if (!current) return current;
+      const normalized = persistActiveRoom(normalizeLoadedState(current), selectedAgentId);
+      appInvoke("save_fleet_state", { state: normalized }).catch((error) =>
+        console.error("Failed to save agent pane order:", error),
+      );
+      return normalized;
+    });
+  }, [selectedAgentId]);
+  const moveWorkspace = useCallback((draggedRoomId: string, targetRoomId: string) => {
+    setFleetState((current) => {
+      if (!current || draggedRoomId === targetRoomId) return current;
+      const persisted = persistActiveRoom(normalizeLoadedState(current), selectedAgentId);
+      const fromIndex = persisted.rooms.findIndex((room) => room.id === draggedRoomId);
+      const toIndex = persisted.rooms.findIndex((room) => room.id === targetRoomId);
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return current;
+      const rooms = [...persisted.rooms];
+      const [draggedRoom] = rooms.splice(fromIndex, 1);
+      rooms.splice(toIndex, 0, draggedRoom);
+      const normalized = normalizeLoadedState({
+        ...persisted,
+        rooms,
+        roomOrder: rooms.map((room) => room.id),
+      });
+      appInvoke("save_fleet_state", { state: normalized }).catch((error) =>
+        console.error("Failed to save workspace order:", error),
+      );
+      return normalized;
+    });
+    setDragOverWorkspaceId(targetRoomId);
+  }, [selectedAgentId]);
+  const finishWorkspaceDrag = useCallback(() => {
+    setDraggingWorkspaceId(null);
+    setDragOverWorkspaceId(null);
+    setFleetState((current) => {
+      if (!current) return current;
+      const normalized = normalizeLoadedState(current);
+      appInvoke("save_fleet_state", { state: normalized }).catch((error) =>
+        console.error("Failed to save workspace order:", error),
+      );
+      return normalized;
+    });
+  }, []);
+  const quickOpenEntries = useMemo<QuickOpenEntry[]>(() => {
+    if (!fleetState) return [];
+    const entries: QuickOpenEntry[] = [
+      {
+        id: "command:new-room",
+        kind: "command",
+        title: "New workspace",
+        subtitle: "Open or create another workspace",
+        keywords: ["workspace", "project", "create"],
+        run: startNewRoom,
+      },
+    ];
+
+    if (fleetState.activeWorkspace) {
+      entries.push(
+        {
+          id: "command:add-agent",
+          kind: "command",
+          title: "Add agent",
+          subtitle: "Add another project-local agent to this workspace",
+          keywords: ["claude", "codex", "project"],
+          run: () => setIsAddAgentOpen(true),
+        },
+        {
+          id: "command:toggle-focus",
+          kind: "command",
+          title: isFocusMode ? "Exit focus mode" : "Focus selected agent",
+          subtitle: selectedAgent ? selectedAgent.label : "Choose an agent first",
+          keywords: ["zoom", "pane", "terminal", "chat"],
+          run: () => {
+            if (selectedAgent) setIsFocusMode((value) => !value);
+          },
+        },
+      );
+    }
+
+    for (const room of fleetState.rooms) {
+      entries.push({
+        id: `room:${room.id}`,
+        kind: "room",
+        title: room.workspace.name,
+        subtitle: `${room.agents.length} agent${room.agents.length === 1 ? "" : "s"} · ${shortPath(room.workspace.path)}`,
+        keywords: [room.workspace.path, ...room.agents.map((agent) => agent.label)],
+        run: () => switchRoom(room.id),
+      });
+    }
+
+    for (const agent of fleetState.agents) {
+      entries.push({
+        id: `agent:${agent.id}`,
+        kind: "agent",
+        title: agent.label,
+        subtitle: `${agent.role} · ${agent.runtime} · ${shortPath(agent.cwd)}`,
+        keywords: [agent.id, agent.role, agent.runtime, agent.cwd ?? ""],
+        run: () => selectAgent(agent.id),
+      });
+    }
+
+    for (const message of fleetState.messages.slice(0, 12)) {
+      const targetAgentId = fleetState.agents.some((agent) => agent.id === message.to)
+        ? message.to
+        : fleetState.agents.some((agent) => agent.id === message.from)
+          ? message.from
+          : null;
+      entries.push({
+        id: `message:${message.id}`,
+        kind: "message",
+        title: message.body,
+        subtitle: `${message.from} to ${message.to}${formatTime(message.createdAt) ? ` at ${formatTime(message.createdAt)}` : ""}`,
+        keywords: [message.from, message.to, message.body],
+        run: () => {
+          if (targetAgentId) selectAgent(targetAgentId);
+        },
+      });
+    }
+
+    return entries;
+  }, [fleetState, isFocusMode, selectedAgent]);
 
   if (!ready) {
     return (
@@ -728,156 +1138,169 @@ function App() {
 
   if (!fleetState.activeWorkspace) {
     return (
-      <WorkspaceSetup
-        tabs={
-          <RoomTabs
-            rooms={fleetState.rooms}
-            activeRoomId={fleetState.activeRoomId}
-            onSelectRoom={switchRoom}
-            onNewRoom={startNewRoom}
-          />
-        }
-        path={setupPath}
-        name={setupName}
-        error={setupError}
-        onPathChange={setSetupPath}
-        onNameChange={setSetupName}
-        onOpen={openWorkspace}
-        onCreate={createWorkspace}
-        onBrowse={browseSetupPath}
-      />
+      <>
+        <WorkspaceSetup
+          path={setupPath}
+          name={setupName}
+          error={setupError}
+          onPathChange={setSetupPath}
+          onNameChange={setSetupName}
+          onOpen={openWorkspace}
+          onCreate={createWorkspace}
+          onBrowse={browseSetupPath}
+        />
+        <QuickOpen
+          open={isQuickOpenOpen}
+          entries={quickOpenEntries}
+          onClose={() => setIsQuickOpenOpen(false)}
+        />
+      </>
     );
   }
 
   return (
-    <main className={`app-shell room-shell ${isFocusMode ? "is-focus-mode" : ""}`}>
-      <RoomTabs
-        rooms={fleetState.rooms}
-        activeRoomId={fleetState.activeRoomId}
-        onSelectRoom={switchRoom}
-        onNewRoom={startNewRoom}
-      />
-      <section className="room-workbench">
-        <header className="workbench-bar">
-          <div>
-            <span>Selected project</span>
-            <h1>{selectedAgent?.label ?? "No agent selected"}</h1>
-            <p>{selectedAgent?.role ?? "Choose an agent from the room."}</p>
-          </div>
-          {selectedAgent ? (
-            <div className="workbench-actions">
-              <div className="workbench-meta">
-                <code>{selectedAgent.runtime}</code>
-                <code>{selectedAgent.id}</code>
-              </div>
-            </div>
-          ) : null}
-        </header>
-
-        <section className="terminal-stage">
-          {fleetState.agents.length > 0 ? (
-            <div className={`agent-grid ${isFocusMode ? "is-focused" : ""}`}>
-              {fleetState.agents.map((agent) => (
-                <ProjectAgentPane
-                  key={`${fleetState.activeRoomId ?? "room"}:${agent.id}`}
-                  roomId={fleetState.activeRoomId ?? fleetState.activeWorkspace?.id ?? "room"}
-                  agent={agent}
-                  selected={agent.id === selectedAgent?.id}
-                  focused={isFocusMode && agent.id === selectedAgent?.id}
-                  runtimeContext={runtimeContext}
-                  allAgents={fleetState.agents}
-                  shouldResume={hasUsableSession(agent)}
-                  onSelect={selectAgent}
-                  onFocus={(id) => {
-                    if (isFocusMode && id === selectedAgent?.id) {
-                      setIsFocusMode(false);
-                    } else {
-                      selectAgent(id);
-                      setIsFocusMode(true);
-                    }
-                  }}
-                  onSessionStarted={markAgentSessionStarted}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="empty-note">No agent selected.</div>
-          )}
-        </section>
-      </section>
-
-      <aside className="room-dock">
-        <div className="brand-block">
-          <strong>claude-fleet</strong>
+    <main className={`app-shell bridge-shell ${isFocusMode ? "is-focus-mode" : ""}`}>
+      <aside className="bridge-rail" aria-label="AgentSpace navigation">
+        <div className="bridge-brand">
+          <strong>AgentSpace</strong>
           <span>local context federation</span>
         </div>
 
-        <section className="room-summary" aria-label="Room summary">
-          <div>
-            <span>Room</span>
-            <strong>{fleetState.activeWorkspace.name}</strong>
-            <code title={fleetState.activeWorkspace.path}>{shortPath(fleetState.activeWorkspace.path)}</code>
-          </div>
-          <dl>
-            <div>
-              <dt>Agents</dt>
-              <dd>{fleetState.agents.length}</dd>
-            </div>
-            <div>
-              <dt>Messages</dt>
-              <dd>{fleetState.messages.length}</dd>
-            </div>
-          </dl>
-        </section>
-
-        <section className="agent-list-block">
+        <section className="workspace-list-block">
           <div className="sidebar-heading">
-            <span>Agents</span>
-            <small>{fleetState.agents.length}</small>
+            <span>Workspaces</span>
+            <small>{fleetState.rooms.length}</small>
           </div>
-          <div className="agent-roster" aria-label="Agent roster">
-            {fleetState.agents.map((agent) => (
-              <button
-                className={`roster-agent ${agent.id === selectedAgent?.id ? "is-active" : ""}`}
-                key={agent.id}
-                onClick={() => selectAgent(agent.id)}
-                type="button"
+          <div className="workspace-list" aria-label="Workspace list">
+            {fleetState.rooms.map((room) => (
+              <div
+                className={[
+                  "workspace-row",
+                  room.id === fleetState.activeRoomId ? "is-active" : "",
+                  draggingWorkspaceId === room.id ? "is-dragging" : "",
+                  dragOverWorkspaceId === room.id ? "is-drag-over" : "",
+                ].filter(Boolean).join(" ")}
+                key={room.id}
               >
-                <span className="agent-color" style={{ background: agent.accentColor ?? "#d6d876" }} />
-                <span>
-                  <strong>{agent.label}</strong>
-                  <small>{agent.role}</small>
+                <button
+                  className="workspace-row-main"
+                  draggable
+                  onClick={() => switchRoom(room.id)}
+                  onDragEnd={finishWorkspaceDrag}
+                  onDragEnter={(event) => {
+                    event.preventDefault();
+                    if (draggingWorkspaceId) moveWorkspace(draggingWorkspaceId, room.id);
+                  }}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDragStart={(event) => {
+                    setDraggingWorkspaceId(room.id);
+                    setDragOverWorkspaceId(room.id);
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", room.id);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const draggedId = draggingWorkspaceId ?? event.dataTransfer.getData("text/plain");
+                    if (draggedId) moveWorkspace(draggedId, room.id);
+                    finishWorkspaceDrag();
+                  }}
+                  type="button"
+                >
+                  <span>
+                    <strong>{room.workspace.name}</strong>
+                    <small>{shortPath(room.workspace.path)}</small>
+                  </span>
+                  <code className="workspace-count">{room.agents.length}</code>
+                </button>
+                <span className="workspace-row-actions" aria-label={`${room.workspace.name} actions`}>
+                  <button
+                    className="workspace-row-action"
+                    onClick={() => openAddAgentForRoom(room.id)}
+                    title={`Add agent to ${room.workspace.name}`}
+                    type="button"
+                    aria-label={`Add agent to ${room.workspace.name}`}
+                  >
+                    +
+                  </button>
+                  <button
+                    className="workspace-row-action is-danger"
+                    onClick={() => removeWorkspace(room.id)}
+                    title={`Delete ${room.workspace.name} workspace`}
+                    type="button"
+                    aria-label={`Delete ${room.workspace.name} workspace`}
+                  >
+                    x
+                  </button>
                 </span>
-                <code>{agent.runtime}</code>
-              </button>
+              </div>
             ))}
           </div>
         </section>
 
-        <button className="btn primary wide" onClick={() => setIsAddAgentOpen(true)}>
-          Add agent
-        </button>
-
-        <AgentDetails
-          agent={selectedAgent}
-          agents={fleetState.agents}
-          messages={fleetState.messages}
-          manualRecipient={manualRecipient}
-          manualMessage={manualMessage}
-          manualError={manualError}
-          isSendingMessage={isSendingMessage}
-          onManualRecipientChange={setManualRecipient}
-          onManualMessageChange={setManualMessage}
-          onSendManualMessage={sendManualMessage}
-          onEditAgent={() => setIsEditAgentOpen(true)}
-        />
-
-        <div className="mailbox-root" title={mailboxRoot ?? "~/.claude-fleet/mail"}>
-          <span>Mailbox</span>
-          <code>{shortPath(mailboxRoot ?? "~/.claude-fleet/mail")}</code>
+        <div className="rail-actions">
+          <button className="btn wide" onClick={resetRoom}>New workspace</button>
+          <button className="btn wide" onClick={() => setIsQuickOpenOpen(true)}>Quick open</button>
         </div>
-        <button className="btn wide" onClick={resetRoom}>Switch room</button>
+
+        <div className="mailbox-root" title={mailboxRoot ?? "mailbox unavailable"}>
+          <span>Mailbox</span>
+          <code>{mailboxRoot ? shortPath(mailboxRoot) : "mailbox unavailable"}</code>
+        </div>
       </aside>
+
+      <section className="room-workbench">
+        <section className="terminal-stage" aria-label="Agent panes">
+          {visibleAgents.length > 0 ? (
+            <div className={`agent-grid ${isFocusMode ? "is-focused" : ""}`}>
+              {visibleAgents.map((agent) => {
+                const roomId = fleetState.activeRoomId ?? fleetState.activeWorkspace?.id ?? "room";
+                const ptyId = scopedAgentId(roomId, agent.id);
+                const paneKey = `${roomId}:${agent.id}`;
+                const paneStatus = agentPaneStatus(agent, ptyId, ptyStatuses);
+                return (
+                  <ProjectAgentPane
+                    key={`${fleetState.activeRoomId ?? "room"}:${agent.id}`}
+                    roomId={roomId}
+                    agent={agent}
+                    status={paneStatus}
+                    selected={agent.id === selectedAgent?.id}
+                    focused={isFocusMode && agent.id === selectedAgent?.id}
+                    runtimeContext={runtimeContext}
+                    allAgents={fleetState.agents}
+                    shouldResume={hasUsableSession(agent)}
+                    paneSize={agentPaneSizes[paneKey]}
+                    dragging={draggingAgentId === agent.id}
+                    dragOver={dragOverAgentId === agent.id}
+                    appInvoke={appInvoke}
+                    onSelect={selectAgent}
+                    onOpenDetails={openAgentDetails}
+                    onFocus={(id) => {
+                      if (isFocusMode && id === selectedAgent?.id) {
+                        setIsFocusMode(false);
+                      } else {
+                        selectAgent(id);
+                        setIsFocusMode(true);
+                      }
+                    }}
+                    onPaneResize={(size) => resizeAgentPane(paneKey, size)}
+                    onPaneDragStart={setDraggingAgentId}
+                    onPaneDragMove={moveAgentPane}
+                    onPaneDragEnd={finishAgentPaneDrag}
+                    onPrepareClaudeSession={prepareClaudeSession}
+                    onTerminalStarted={markAgentTerminalStarted}
+                    onTranscriptSession={markAgentTranscriptSession}
+                    onTranscriptMessages={recordTranscriptTaskMessages}
+                    onSendMessage={sendAgentMessage}
+                    onFreshRestart={restartAgentFresh}
+                  />
+                );
+              })}
+            </div>
+          ) : (
+            <div className="empty-note">No agents in this workspace yet.</div>
+          )}
+        </section>
+      </section>
 
       {isAddAgentOpen ? (
         <AddAgentModal
@@ -906,20 +1329,140 @@ function App() {
           onClose={() => setIsEditAgentOpen(false)}
         />
       ) : null}
+      {isAgentDetailsOpen ? (
+        <AgentDetailsModal
+          agent={selectedAgent}
+          agents={fleetState.agents}
+          messages={fleetState.messages}
+          manualRecipient={manualRecipient}
+          manualMessage={manualMessage}
+          manualError={manualError}
+          isSendingMessage={isSendingMessage}
+          onManualRecipientChange={setManualRecipient}
+          onManualMessageChange={setManualMessage}
+          onSendManualMessage={sendManualMessage}
+          onEditAgent={() => {
+            setIsAgentDetailsOpen(false);
+            setIsEditAgentOpen(true);
+          }}
+          onClose={() => setIsAgentDetailsOpen(false)}
+        />
+      ) : null}
+      {isWorkspaceModalOpen ? (
+        <WorkspaceModal
+          path={setupPath}
+          name={setupName}
+          error={setupError}
+          onPathChange={setSetupPath}
+          onNameChange={setSetupName}
+          onOpen={openWorkspace}
+          onCreate={createWorkspace}
+          onBrowse={browseSetupPath}
+          onClose={() => {
+            setIsWorkspaceModalOpen(false);
+            setSetupError(null);
+          }}
+        />
+      ) : null}
+      <QuickOpen
+        open={isQuickOpenOpen}
+        entries={quickOpenEntries}
+        onClose={() => setIsQuickOpenOpen(false)}
+      />
     </main>
   );
+}
+
+function normalizeTasks(tasks: LegacyTaskRecord[] | undefined): LegacyTaskRecord[] {
+  return (tasks ?? []).map((task) => ({
+    id: task.id,
+    title: task.title || "Untitled task",
+    body: task.body ?? "",
+    status: normalizeStatus(task.status),
+    assignee: task.assignee ?? null,
+    sourceMessageId: task.sourceMessageId ?? null,
+    linkedMessageIds: task.linkedMessageIds ?? [],
+    activeAgentIds: task.activeAgentIds ?? (task.assignee ? [task.assignee] : []),
+    lastAgentActivityAt: task.lastAgentActivityAt ?? null,
+    subtasks: (task.subtasks ?? []).map((subtask) => ({
+      id: subtask.id,
+      title: subtask.title || "Untitled subtask",
+      status: normalizeStatus(subtask.status),
+      assignee: subtask.assignee ?? null,
+      createdBy: subtask.createdBy ?? "agent",
+      createdAt: subtask.createdAt ?? new Date().toISOString(),
+      updatedAt: subtask.updatedAt ?? subtask.createdAt ?? new Date().toISOString(),
+    })),
+    issues: (task.issues ?? []).map((issue) => ({
+      id: issue.id,
+      title: issue.title || "Untitled issue",
+      body: issue.body ?? "",
+      severity: ["low", "medium", "high", "critical"].includes(issue.severity)
+        ? issue.severity
+        : "medium",
+      status: issue.status === "resolved" ? "resolved" : "open",
+      agentId: issue.agentId ?? null,
+      createdAt: issue.createdAt ?? new Date().toISOString(),
+      updatedAt: issue.updatedAt ?? issue.createdAt ?? new Date().toISOString(),
+    })),
+    role: task.role ?? null,
+    ownedFiles: task.ownedFiles ?? [],
+    acceptanceCriteria: task.acceptanceCriteria ?? [],
+    dependsOn: task.dependsOn ?? [],
+    reviewNotes: task.reviewNotes ?? null,
+    swarmId: task.swarmId ?? null,
+    comments: task.comments ?? [],
+    createdAt: task.createdAt ?? new Date().toISOString(),
+    updatedAt: task.updatedAt ?? task.createdAt ?? new Date().toISOString(),
+  }));
+}
+
+function normalizeAutomations(automations: AutomationRecord[] | undefined): AutomationRecord[] {
+  return (automations ?? []).map((automation) => ({
+    id: automation.id,
+    name: automation.name || "Untitled automation",
+    enabled: automation.enabled ?? true,
+    target: {
+      mode: automation.target?.mode === "room" ? "room" : "agent",
+      agentIds: automation.target?.agentIds ?? [],
+    },
+    prompt: automation.prompt ?? "",
+    schedule: {
+      kind: automation.schedule?.kind ?? "manual",
+      expression: automation.schedule?.expression ?? null,
+      timezone: automation.schedule?.timezone ?? "UTC",
+    },
+    attachToTaskId: automation.attachToTaskId ?? null,
+    createdAt: automation.createdAt ?? new Date().toISOString(),
+    updatedAt: automation.updatedAt ?? automation.createdAt ?? new Date().toISOString(),
+  }));
+}
+
+function normalizeAutomationRuns(runs: AutomationRunRecord[] | undefined): AutomationRunRecord[] {
+  return (runs ?? []).map((run) => ({
+    id: run.id,
+    automationId: run.automationId,
+    status: run.status ?? "done",
+    startedAt: run.startedAt ?? null,
+    completedAt: run.completedAt ?? null,
+    outputMessageIds: run.outputMessageIds ?? [],
+    error: run.error ?? null,
+  }));
 }
 
 function normalizeAgents(agents: AgentRecord[], workspacePath: string | null): AgentRecord[] {
   return agents.map((agent, index) => {
     const isLegacyOrchestrator = agent.id === "orchestrator" || agent.role === "orchestrator";
+    const runtime = agent.runtime ?? "claude";
+    const validSessionId = agent.sessionId && sessionIdPattern.test(agent.sessionId) ? agent.sessionId : null;
+    const status = runtime === "claude" && !validSessionId ? "idle" : agent.status || "idle";
     return {
       ...agent,
       id: agent.id,
       label: isLegacyOrchestrator ? "home-project" : agent.label,
       accentColor: agent.accentColor ?? defaultAgentColor(index),
       title: agent.title ?? null,
-      runtime: agent.runtime ?? "claude",
+      runtime,
       role: isLegacyOrchestrator ? "project expert" : agent.role || "project expert",
       reportsTo: null,
       capabilities:
@@ -932,8 +1475,8 @@ function normalizeAgents(agents: AgentRecord[], workspacePath: string | null): A
       runtimeConfig: agent.runtimeConfig ?? { heartbeat: { enabled: false, wakeOnDemand: true } },
       permissions: { canCreateAgents: false, canManageTasks: false },
       sourceTaskId: null,
-      sessionId: agent.sessionId && sessionIdPattern.test(agent.sessionId) ? agent.sessionId : createSessionId(),
-      status: agent.sessionId && sessionIdPattern.test(agent.sessionId) ? agent.status || "idle" : "idle",
+      sessionId: validSessionId,
+      status,
     };
   });
 }
@@ -949,10 +1492,12 @@ function normalizeRoom(room: RoomRecord): RoomRecord {
         ? room.mainAgentId
         : agents[0]?.id ?? null,
     agents,
-    tasks: [],
+    tasks: normalizeTasks(room.tasks),
     orchestratorChat: [],
     messages: room.messages ?? [],
     runs: [],
+    automations: normalizeAutomations(room.automations),
+    automationRuns: normalizeAutomationRuns(room.automationRuns),
     workspaces: room.workspaces ?? [],
     selectedAgentId:
       room.selectedAgentId && agents.some((agent) => agent.id === room.selectedAgentId)
@@ -978,6 +1523,8 @@ function snapshotActiveRoom(
     orchestratorChat: state.orchestratorChat,
     messages: state.messages,
     runs: state.runs,
+    automations: state.automations,
+    automationRuns: state.automationRuns,
     workspaces: state.workspaces,
     selectedAgentId: selectedAgentId ?? state.mainAgentId ?? state.agents[0]?.id ?? null,
     createdAt: state.activeWorkspace.createdAt,
@@ -986,22 +1533,55 @@ function snapshotActiveRoom(
 }
 
 function upsertRoom(rooms: RoomRecord[], room: RoomRecord): RoomRecord[] {
-  const nextRooms = rooms.filter((item) => item.id !== room.id);
-  return [room, ...nextRooms];
+  const existingIndex = rooms.findIndex((item) => item.id === room.id);
+  if (existingIndex === -1) return [...rooms, room];
+  return rooms.map((item, index) => (index === existingIndex ? room : item));
+}
+
+function roomCreatedAtValue(room: RoomRecord) {
+  const parsed = Date.parse(room.createdAt ?? room.workspace.createdAt);
+  return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
+function orderedRoomIds(rooms: RoomRecord[], roomOrder: string[] | undefined): string[] {
+  const knownIds = new Set(rooms.map((room) => room.id));
+  const seen = new Set<string>();
+  const ordered = (roomOrder ?? []).filter((id) => {
+    if (!knownIds.has(id) || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  const missing = rooms
+    .filter((room) => !seen.has(room.id))
+    .sort((a, b) => roomCreatedAtValue(a) - roomCreatedAtValue(b) || a.id.localeCompare(b.id))
+    .map((room) => room.id);
+  return [...ordered, ...missing];
+}
+
+function orderRooms(rooms: RoomRecord[], roomOrder: string[] | undefined) {
+  const order = orderedRoomIds(rooms, roomOrder);
+  const roomById = new Map(rooms.map((room) => [room.id, room]));
+  return {
+    rooms: order.map((id) => roomById.get(id)).filter((room): room is RoomRecord => Boolean(room)),
+    roomOrder: order,
+  };
 }
 
 function persistActiveRoom(state: FleetState, selectedAgentId?: string | null): FleetState {
   const snapshot = snapshotActiveRoom(state, selectedAgentId, new Date().toISOString());
   if (!snapshot) return state;
+  const ordered = orderRooms(upsertRoom(state.rooms ?? [], snapshot), state.roomOrder);
   return {
     ...state,
     activeRoomId: snapshot.id,
-    rooms: upsertRoom(state.rooms ?? [], snapshot),
+    rooms: ordered.rooms,
+    roomOrder: ordered.roomOrder,
   };
 }
 
 function applyRoomToState(state: FleetState, room: RoomRecord): FleetState {
   const normalizedRoom = normalizeRoom(room);
+  const ordered = orderRooms(upsertRoom(state.rooms ?? [], normalizedRoom), state.roomOrder);
   return normalizeLoadedState({
     ...state,
     activeRoomId: normalizedRoom.id,
@@ -1012,433 +1592,136 @@ function applyRoomToState(state: FleetState, room: RoomRecord): FleetState {
     orchestratorChat: normalizedRoom.orchestratorChat,
     messages: normalizedRoom.messages,
     runs: normalizedRoom.runs,
+    automations: normalizedRoom.automations,
+    automationRuns: normalizedRoom.automationRuns,
     workspaces: normalizedRoom.workspaces,
-    rooms: upsertRoom(state.rooms ?? [], normalizedRoom),
+    rooms: ordered.rooms,
+    roomOrder: ordered.roomOrder,
   });
 }
 
 function normalizeLoadedState(state: FleetState): FleetState {
-  const workspacePath = state.activeWorkspace?.path ?? null;
-  const agents = normalizeAgents(state.agents ?? [], workspacePath);
   const savedRooms = (state.rooms ?? []).map(normalizeRoom);
-  const activeRoomId = state.activeRoomId ?? state.activeWorkspace?.id ?? savedRooms[0]?.id ?? null;
-  const activeSelectedAgentId = savedRooms.find((room) => room.id === activeRoomId)?.selectedAgentId ?? state.mainAgentId;
+  const savedRoomOrder = orderedRoomIds(savedRooms, state.roomOrder);
+  const orderedSavedRooms = orderRooms(savedRooms, savedRoomOrder).rooms;
+  const activeRoomId = state.activeRoomId ?? state.activeWorkspace?.id ?? orderedSavedRooms[0]?.id ?? null;
+  const savedActiveRoom = orderedSavedRooms.find((room) => room.id === activeRoomId) ?? null;
+  const activeWorkspace = state.activeWorkspace ?? savedActiveRoom?.workspace ?? null;
+  const workspacePath = activeWorkspace?.path ?? null;
+  const sourceAgents = state.activeWorkspace ? state.agents : savedActiveRoom?.agents ?? state.agents;
+  const sourceTasks = state.activeWorkspace ? state.tasks : savedActiveRoom?.tasks ?? state.tasks;
+  const sourceMessages = state.activeWorkspace ? state.messages : savedActiveRoom?.messages ?? state.messages;
+  const sourceAutomations = state.activeWorkspace ? state.automations : savedActiveRoom?.automations ?? state.automations;
+  const sourceAutomationRuns = state.activeWorkspace
+    ? state.automationRuns
+    : savedActiveRoom?.automationRuns ?? state.automationRuns;
+  const sourceWorkspaces = state.activeWorkspace ? state.workspaces : savedActiveRoom?.workspaces ?? state.workspaces;
+  const preferredMainAgentId = state.mainAgentId ?? savedActiveRoom?.mainAgentId ?? null;
+  const agents = normalizeAgents(sourceAgents ?? [], workspacePath);
+  const tasks = normalizeTasks(sourceTasks);
+  const automations = normalizeAutomations(sourceAutomations);
+  const automationRuns = normalizeAutomationRuns(sourceAutomationRuns);
+  const activeSelectedAgentId = savedActiveRoom?.selectedAgentId ?? state.mainAgentId;
   const activeSnapshot = snapshotActiveRoom(
     {
       ...state,
       activeRoomId,
+      activeWorkspace,
       agents,
-      tasks: [],
+      tasks,
       orchestratorChat: [],
-      messages: state.messages ?? [],
+      messages: sourceMessages ?? [],
       runs: [],
-      workspaces: state.workspaces ?? [],
-      rooms: savedRooms,
+      automations,
+      automationRuns,
+      workspaces: sourceWorkspaces ?? [],
+      rooms: orderedSavedRooms,
     },
     activeSelectedAgentId,
   );
-  const rooms = activeSnapshot ? upsertRoom(savedRooms, activeSnapshot) : savedRooms;
+  const ordered = orderRooms(
+    activeSnapshot ? upsertRoom(orderedSavedRooms, activeSnapshot) : orderedSavedRooms,
+    savedRoomOrder,
+  );
 
   return {
     ...state,
-    schemaVersion: 4,
+    schemaVersion: 5,
     activeRoomId,
-    rooms,
+    rooms: ordered.rooms,
+    roomOrder: ordered.roomOrder,
     mainAgentId:
-      state.mainAgentId && agents.some((agent) => agent.id === state.mainAgentId)
-        ? state.mainAgentId
+      preferredMainAgentId && agents.some((agent) => agent.id === preferredMainAgentId)
+        ? preferredMainAgentId
         : agents[0]?.id ?? null,
+    activeWorkspace,
     agents,
-    tasks: [],
+    tasks,
     orchestratorChat: [],
-    messages: state.messages ?? [],
+    messages: sourceMessages ?? [],
     runs: [],
-    workspaces: state.workspaces ?? [],
+    automations,
+    automationRuns,
+    workspaces: sourceWorkspaces ?? [],
   };
 }
 
-function RoomTabs({
-  rooms,
-  activeRoomId,
-  onSelectRoom,
-  onNewRoom,
-}: {
-  rooms: RoomRecord[];
-  activeRoomId: string | null;
-  onSelectRoom: (id: string) => void;
-  onNewRoom: () => void;
-}) {
-  return (
-    <nav className="room-tabs" aria-label="Rooms">
-      <div className="room-tab-strip">
-        {rooms.map((room) => (
-          <button
-            className={`room-tab ${room.id === activeRoomId ? "is-active" : ""}`}
-            key={room.id}
-            onClick={() => onSelectRoom(room.id)}
-            title={room.workspace.path}
-            type="button"
-          >
-            <span>{room.workspace.name}</span>
-            <small>{room.agents.length}</small>
-          </button>
-        ))}
-        <button
-          aria-label="New room"
-          className="room-tab add-room-tab"
-          onClick={onNewRoom}
-          type="button"
-          title="New room"
-        >
-          +
-        </button>
-      </div>
-    </nav>
-  );
-}
-
-function ProjectAgentPane({
-  roomId,
+function AgentDetailsModal({
   agent,
-  selected,
-  focused,
-  runtimeContext,
-  allAgents,
-  shouldResume,
-  onSelect,
-  onFocus,
-  onSessionStarted,
+  agents,
+  messages,
+  manualRecipient,
+  manualMessage,
+  manualError,
+  isSendingMessage,
+  onManualRecipientChange,
+  onManualMessageChange,
+  onSendManualMessage,
+  onEditAgent,
+  onClose,
 }: {
-  roomId: string;
-  agent: AgentRecord;
-  selected: boolean;
-  focused: boolean;
-  runtimeContext: RuntimeContext;
-  allAgents: AgentRecord[];
-  shouldResume: boolean;
-  onSelect: (id: string) => void;
-  onFocus: (id: string) => void;
-  onSessionStarted: (id: string) => void;
+  agent: AgentRecord | null;
+  agents: AgentRecord[];
+  messages: MessageRecord[];
+  manualRecipient: string;
+  manualMessage: string;
+  manualError: string | null;
+  isSendingMessage: boolean;
+  onManualRecipientChange: (value: string) => void;
+  onManualMessageChange: (value: string) => void;
+  onSendManualMessage: () => void;
+  onEditAgent: () => void;
+  onClose: () => void;
 }) {
-  const paneRef = useRef<HTMLElement | null>(null);
-  const [terminalReady, setTerminalReady] = useState(selected || focused);
-  const [paneView, setPaneView] = useState<"chat" | "terminal">("chat");
-  const adapter = runtimeAdapters[agent.runtime];
-  const sessionScope = `${roomId}:${agent.id}`;
-  const ptyId = scopedAgentId(roomId, agent.id);
-  const context = {
-    ...runtimeContext,
-    systemPrompt: () => systemPromptFor(agent, allAgents),
-  };
-
-  useEffect(() => {
-    if (terminalReady) return;
-    if (selected || focused) {
-      setTerminalReady(true);
-      return;
-    }
-
-    const pane = paneRef.current;
-    if (!pane || !("IntersectionObserver" in window)) {
-      setTerminalReady(true);
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          setTerminalReady(true);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: "320px" },
-    );
-    observer.observe(pane);
-    return () => observer.disconnect();
-  }, [focused, selected, terminalReady]);
-
   return (
-    <article
-      ref={paneRef}
-      className={`agent-pane ${selected ? "is-selected" : ""} ${focused ? "is-focused" : ""}`}
-    >
-      <div className="agent-pane-header">
-        <span className="agent-color" style={{ background: agent.accentColor ?? "#d6d876" }} />
-        <button className="agent-pane-title" onClick={() => onSelect(agent.id)} type="button">
-          <strong>{agent.label}</strong>
-          <small>{agent.role}</small>
-        </button>
-        <div className="agent-pane-actions">
-          <code>{agent.runtime}</code>
-          <div className="pane-mode-toggle" aria-label={`${agent.label} view`}>
-            <button
-              className={paneView === "chat" ? "is-active" : ""}
-              onClick={() => setPaneView("chat")}
-              type="button"
-            >
-              Chat
-            </button>
-            <button
-              className={paneView === "terminal" ? "is-active" : ""}
-              onClick={() => setPaneView("terminal")}
-              type="button"
-            >
-              Terminal
-            </button>
+    <div className="modal-backdrop" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <section className="agent-modal agent-details-modal" role="dialog" aria-modal="true" aria-labelledby="agent-details-title">
+        <header className="modal-header">
+          <div>
+            <h2 id="agent-details-title">{agent ? agent.label : "Agent details"}</h2>
+            <p>{agent ? agent.role : "Choose an agent to inspect, message, or edit."}</p>
           </div>
-          <button className="btn" onClick={() => onFocus(agent.id)}>
-            {focused ? "Exit focus" : "Focus"}
+          <button className="modal-close" onClick={onClose} type="button" aria-label="Close agent details dialog">
+            Close
           </button>
-        </div>
-      </div>
-      <div className="agent-project-path" title={agent.cwd ?? undefined}>{shortPath(agent.cwd)}</div>
-      <div className="agent-live-slot">
-        <div className={`pane-layer ${paneView === "terminal" ? "is-active" : ""}`} aria-hidden={paneView !== "terminal"}>
-          {terminalReady ? (
-            <TerminalPane
-              id={ptyId}
-              agentId={agent.id}
-              sessionScope={sessionScope}
-              cmd={adapter.command}
-              args={adapter.freshArgs(agent.id, context, agent.sessionId)}
-              continueArgs={adapter.resumeArgs(agent.id, context, agent.sessionId)}
-              initialUseContinue={shouldResume}
-              onSessionStarted={() => onSessionStarted(agent.id)}
-              cwd={agent.cwd ?? undefined}
-            />
-          ) : (
-            <div className="terminal-standby" aria-label={`${agent.label} terminal standby`}>
-              <span>standby</span>
-            </div>
-          )}
-        </div>
-        <div className={`pane-layer ${paneView === "chat" ? "is-active" : ""}`} aria-hidden={paneView !== "chat"}>
-          <AgentTranscriptChat roomId={roomId} agent={agent} active={paneView === "chat"} />
-        </div>
-      </div>
-    </article>
-  );
-}
+        </header>
 
-function AgentTranscriptChat({ roomId, agent, active }: { roomId: string; agent: AgentRecord; active: boolean }) {
-  const [transcript, setTranscript] = useState<ClaudeTranscript | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const scrollerRef = useRef<HTMLDivElement | null>(null);
-  const isClaude = agent.runtime === "claude";
-  const transcriptKey = `${roomId}:${agent.id}`;
-
-  useEffect(() => {
-    if (!active || !agent.cwd || !isClaude) return;
-    let cancelled = false;
-    let unlistenTranscript: UnlistenFn | undefined;
-    let unlistenError: UnlistenFn | undefined;
-
-    appInvoke<ClaudeTranscript>("read_claude_transcript", {
-      agentId: transcriptKey,
-      cwd: agent.cwd,
-      limit: 80,
-      sessionId: agent.sessionId,
-    })
-      .then((nextTranscript) => {
-        if (cancelled) return;
-        setTranscript(nextTranscript);
-        setError(null);
-      })
-      .catch((loadError) => {
-        if (cancelled) return;
-        setError(String(loadError));
-      });
-
-    if (hasTauriBridge()) {
-      listen<ClaudeTranscriptEvent>(`claude:transcript:${transcriptKey}`, (event) => {
-        if (cancelled) return;
-        setTranscript(event.payload.transcript);
-        setError(null);
-      }).then((unlisten) => {
-        if (cancelled) {
-          unlisten();
-          return;
-        }
-        unlistenTranscript = unlisten;
-      });
-
-      listen<ClaudeTranscriptErrorEvent>(`claude:transcript-error:${transcriptKey}`, (event) => {
-        if (cancelled) return;
-        setError(event.payload.error);
-      }).then((unlisten) => {
-        if (cancelled) {
-          unlisten();
-          return;
-        }
-        unlistenError = unlisten;
-      });
-
-      appInvoke("watch_claude_transcript", {
-        agentId: transcriptKey,
-        cwd: agent.cwd,
-        limit: 80,
-        sessionId: agent.sessionId,
-      }).catch((watchError) => {
-        if (!cancelled) setError(String(watchError));
-      });
-    }
-
-    return () => {
-      cancelled = true;
-      unlistenTranscript?.();
-      unlistenError?.();
-      if (hasTauriBridge()) {
-        appInvoke("stop_claude_transcript_watch", { agentId: transcriptKey }).catch(() => {});
-      }
-    };
-  }, [active, agent.cwd, agent.sessionId, isClaude, transcriptKey]);
-
-  useEffect(() => {
-    if (!active) return;
-    const scroller = scrollerRef.current;
-    if (!scroller) return;
-    scroller.scrollTop = scroller.scrollHeight;
-  }, [active, transcript?.messages.length]);
-
-  if (!agent.cwd) {
-    return (
-      <div className="chat-empty-state">
-        <strong>No project path</strong>
-        <span>Add a project path to read this agent's Claude session as chat.</span>
-      </div>
-    );
-  }
-
-  if (!isClaude) {
-    return (
-      <div className="chat-empty-state">
-        <strong>Chat transcript unavailable</strong>
-        <span>Codex panes still run in terminal mode. Claude JSONL chat is available for Claude agents.</span>
-      </div>
-    );
-  }
-
-  const messages = transcript?.messages ?? [];
-
-  return (
-    <section className="agent-chat" aria-label={`${agent.label} Claude transcript`}>
-      <header className="agent-chat-header">
-        <div>
-          <strong>Chat</strong>
-          <span title={transcript?.sessionPath ?? undefined}>
-            {transcript?.sessionId ? `session ${transcript.sessionId.slice(0, 8)}` : "waiting for Claude session"}
-          </span>
-        </div>
-        <code>{messages.length}</code>
-      </header>
-
-      <div ref={scrollerRef} className="chat-scroll">
-        {messages.map((message) => {
-          const toolName = toolEventName(message.body);
-          if (toolName) {
-            return (
-              <div className="chat-event" key={message.id}>
-                <span>tool</span>
-                <code>{toolName}</code>
-                {message.createdAt ? <time>{formatTime(message.createdAt)}</time> : null}
-              </div>
-            );
-          }
-
-          return (
-            <article className={`chat-message is-${message.role}`} key={message.id}>
-              <div className="chat-message-meta">
-                <span>{message.role === "assistant" ? agent.label : "you"}</span>
-                {message.createdAt ? <time>{formatTime(message.createdAt)}</time> : null}
-              </div>
-              <ChatMessageBody body={message.body} />
-            </article>
-          );
-        })}
-        {messages.length === 0 && !error ? (
-          <div className="chat-empty-state">
-            <strong>No transcript yet</strong>
-            <span>Claude will appear here after this project has an active session in ~/.claude/projects.</span>
-          </div>
-        ) : null}
-        {error ? (
-          <div className="chat-empty-state is-error">
-            <strong>Could not read transcript</strong>
-            <span>{error}</span>
-          </div>
-        ) : null}
-      </div>
-    </section>
-  );
-}
-
-function renderInlineMarkdown(text: string) {
-  const nodes: React.ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      nodes.push(text.slice(lastIndex, match.index));
-    }
-
-    const token = match[0];
-    if (token.startsWith("`")) {
-      nodes.push(<code key={`${match.index}-code`}>{token.slice(1, -1)}</code>);
-    } else {
-      nodes.push(<strong key={`${match.index}-strong`}>{token.slice(2, -2)}</strong>);
-    }
-    lastIndex = match.index + token.length;
-  }
-
-  if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex));
-  }
-
-  return nodes;
-}
-
-function ChatMessageBody({ body }: { body: string }) {
-  const segments = body.split(/(```[\s\S]*?```)/g).filter(Boolean);
-
-  return (
-    <div className="chat-message-body">
-      {segments.map((segment, segmentIndex) => {
-        if (segment.startsWith("```") && segment.endsWith("```")) {
-          const code = segment.replace(/^```[^\n]*\n?/, "").replace(/```$/, "").trimEnd();
-          return <pre key={segmentIndex}><code>{code}</code></pre>;
-        }
-
-        return segment
-          .split(/\n{2,}/)
-          .map((block, blockIndex) => {
-            const lines = block.split("\n").map((line) => line.trimEnd()).filter(Boolean);
-            if (lines.length === 0) return null;
-
-            const everyLineIsBullet = lines.every((line) => /^[-*]\s+/.test(line.trim()));
-            if (everyLineIsBullet) {
-              return (
-                <ul key={`${segmentIndex}-${blockIndex}`}>
-                  {lines.map((line, lineIndex) => (
-                    <li key={lineIndex}>{renderInlineMarkdown(line.trim().replace(/^[-*]\s+/, ""))}</li>
-                  ))}
-                </ul>
-              );
-            }
-
-            return (
-              <p key={`${segmentIndex}-${blockIndex}`}>
-                {lines.map((line, lineIndex) => (
-                  <React.Fragment key={lineIndex}>
-                    {lineIndex > 0 ? <br /> : null}
-                    {renderInlineMarkdown(line.trim())}
-                  </React.Fragment>
-                ))}
-              </p>
-            );
-          });
-      })}
+        <AgentDetails
+          agent={agent}
+          agents={agents}
+          messages={messages}
+          manualRecipient={manualRecipient}
+          manualMessage={manualMessage}
+          manualError={manualError}
+          isSendingMessage={isSendingMessage}
+          onManualRecipientChange={onManualRecipientChange}
+          onManualMessageChange={onManualMessageChange}
+          onSendManualMessage={onSendManualMessage}
+          onEditAgent={onEditAgent}
+        />
+      </section>
     </div>
   );
 }
@@ -1471,7 +1754,7 @@ function AgentDetails({
   return (
     <>
       <section className="panel-section">
-        <div className="section-title">Selected Agent</div>
+        <div className="section-title">Agent</div>
         {agent ? (
           <div className="agent-summary-card">
             <div>
@@ -1523,7 +1806,9 @@ function AgentDetails({
         <div className="message-ledger">
           {messages.slice(0, 14).map((message) => (
             <div className="ledger-item" key={message.id}>
-              <span>{message.from} to {message.to}{formatTime(message.createdAt) ? ` at ${formatTime(message.createdAt)}` : ""}</span>
+              <div className="ledger-item-header">
+                <span>{message.from} to {message.to}{formatTime(message.createdAt) ? ` at ${formatTime(message.createdAt)}` : ""}</span>
+              </div>
               <p>{message.body}</p>
             </div>
           ))}
@@ -1716,8 +2001,58 @@ function AddAgentModal({
   );
 }
 
+function WorkspaceModal({
+  path,
+  name,
+  error,
+  onPathChange,
+  onNameChange,
+  onOpen,
+  onCreate,
+  onBrowse,
+  onClose,
+}: {
+  path: string;
+  name: string;
+  error: string | null;
+  onPathChange: (value: string) => void;
+  onNameChange: (value: string) => void;
+  onOpen: () => void;
+  onCreate: () => void;
+  onBrowse: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <section className="agent-modal workspace-modal" role="dialog" aria-modal="true" aria-labelledby="workspace-modal-title">
+        <header className="modal-header">
+          <div>
+            <h2 id="workspace-modal-title">New workspace</h2>
+            <p>Open an existing project folder or create a workspace directory.</p>
+          </div>
+          <button className="modal-close" onClick={onClose} type="button" aria-label="Close workspace dialog">
+            Close
+          </button>
+        </header>
+
+        <WorkspaceForm
+          path={path}
+          name={name}
+          error={error}
+          onPathChange={onPathChange}
+          onNameChange={onNameChange}
+          onOpen={onOpen}
+          onCreate={onCreate}
+          onBrowse={onBrowse}
+        />
+      </section>
+    </div>
+  );
+}
+
 function WorkspaceSetup({
-  tabs,
   path,
   name,
   error,
@@ -1727,7 +2062,6 @@ function WorkspaceSetup({
   onCreate,
   onBrowse,
 }: {
-  tabs?: React.ReactNode;
   path: string;
   name: string;
   error: string | null;
@@ -1739,48 +2073,82 @@ function WorkspaceSetup({
 }) {
   return (
     <main className="setup-shell">
-      {tabs}
       <section className="setup-brand">
         <div className="eyebrow">Context federation</div>
-        <h1>claude-fleet</h1>
+        <h1>AgentSpace</h1>
         <p>
           Choose a home project. Then add one Claude agent per project or service.
           Each agent keeps its own context warm and talks to peers through MCP messages.
         </p>
       </section>
       <section className="setup-panel">
-        <div>
-          <div className="setup-title">Open the fleet room</div>
-          <div className="setup-copy">This path is only the room anchor. Agents can live in different projects.</div>
-        </div>
-        <label className="setup-field">
-          Home project path
-          <div className="path-picker">
-            <input
-              className="setup-input"
-              value={path}
-              placeholder="~/Development/billing-service"
-              onChange={(event) => onPathChange(event.target.value)}
-            />
-            <button className="btn" onClick={onBrowse}>Browse</button>
-          </div>
-        </label>
-        <label className="setup-field">
-          Room name
-          <input
-            className="setup-input"
-            value={name}
-            placeholder="Optional"
-            onChange={(event) => onNameChange(event.target.value)}
-          />
-        </label>
-        {error ? <div className="setup-error">{error}</div> : null}
-        <div className="setup-actions">
-          <button className="btn primary" onClick={onOpen}>Open room</button>
-          <button className="btn btn-secondary" onClick={onCreate}>Create room</button>
-        </div>
+        <WorkspaceForm
+          path={path}
+          name={name}
+          error={error}
+          onPathChange={onPathChange}
+          onNameChange={onNameChange}
+          onOpen={onOpen}
+          onCreate={onCreate}
+          onBrowse={onBrowse}
+        />
       </section>
     </main>
+  );
+}
+
+function WorkspaceForm({
+  path,
+  name,
+  error,
+  onPathChange,
+  onNameChange,
+  onOpen,
+  onCreate,
+  onBrowse,
+}: {
+  path: string;
+  name: string;
+  error: string | null;
+  onPathChange: (value: string) => void;
+  onNameChange: (value: string) => void;
+  onOpen: () => void;
+  onCreate: () => void;
+  onBrowse: () => void;
+}) {
+  return (
+    <>
+      <div>
+        <div className="setup-title">Open workspace</div>
+        <div className="setup-copy">Choose the project that anchors this workspace. Agents can still live in different projects.</div>
+      </div>
+      <label className="setup-field">
+        Project path
+        <div className="path-picker">
+          <input
+            className="setup-input"
+            value={path}
+            placeholder="~/Development/billing-service"
+            onChange={(event) => onPathChange(event.target.value)}
+          />
+          <button className="btn" onClick={onBrowse} type="button">Browse</button>
+        </div>
+      </label>
+      <label className="setup-field">
+        Workspace name
+        <input
+          className="setup-input"
+          value={name}
+          placeholder="Optional"
+          onChange={(event) => onNameChange(event.target.value)}
+        />
+      </label>
+      {error ? <div className="setup-error">{error}</div> : null}
+      <div className="setup-actions">
+        <button className="btn primary" onClick={onOpen} type="button">Open workspace</button>
+        <button className="btn btn-secondary" onClick={onCreate} type="button">Create workspace</button>
+      </div>
+    </>
   );
 }
 

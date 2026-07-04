@@ -4,6 +4,7 @@ mod claude_sessions;
 mod codex_chat;
 mod mcp_config;
 mod pty;
+pub mod runtime_profile;
 
 use claude_sessions::ClaudeSessionWatchers;
 use pty::PtyRegistry;
@@ -21,13 +22,15 @@ pub fn run() {
         .setup(move |_app| {
             bus::start(bus_registry.clone());
             if let Err(e) = mcp_config::write_config() {
-                eprintln!("claude-fleet: failed to write MCP config: {}", e);
+                eprintln!("agent-space: failed to write MCP config: {}", e);
             }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             pty::spawn_pty,
             pty::read_pty_buffer,
+            pty::get_pty_status,
+            pty::list_pty_statuses,
             pty::write_pty,
             pty::resize_pty,
             pty::kill_pty,
@@ -43,6 +46,7 @@ pub fn run() {
             codex_chat::run_orchestrator_chat,
             mcp_config::get_mcp_config_path,
             mcp_config::get_fleet_mcp_binary_path,
+            mcp_config::get_fleet_socket_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

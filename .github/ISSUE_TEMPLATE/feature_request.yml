@@ -1,5 +1,5 @@
 name: Feature request
-description: Propose an improvement for Claude Fleet
+description: Propose an improvement for AgentSpace
 title: "Feature: "
 labels: [enhancement]
 body:
@@ -14,7 +14,7 @@ body:
     id: proposal
     attributes:
       label: Proposal
-      description: What should Claude Fleet do differently?
+      description: What should AgentSpace do differently?
     validations:
       required: true
   - type: textarea
