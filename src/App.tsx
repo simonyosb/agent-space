@@ -273,6 +273,29 @@ async function appInvoke<T>(cmd: string, args?: Record<string, unknown>): Promis
   }
 }
 
+async function checkForProductionUpdate() {
+  if (!hasTauriBridge() || import.meta.env.DEV) return;
+
+  try {
+    const [{ check }, { relaunch }] = await Promise.all([
+      import("@tauri-apps/plugin-updater"),
+      import("@tauri-apps/plugin-process"),
+    ]);
+    const update = await check();
+    if (!update) return;
+
+    const shouldInstall = window.confirm(
+      `AgentSpace ${update.version} is available. Install it and restart now?`,
+    );
+    if (!shouldInstall) return;
+
+    await update.downloadAndInstall();
+    await relaunch();
+  } catch (error) {
+    console.error("Failed to check for AgentSpace updates:", error);
+  }
+}
+
 const hasUsableSession = (agent: AgentRecord) => {
   if (agent.runtime === "codex") return agent.status === "session-started";
   return Boolean(agent.sessionId && agent.status === "session-started");
@@ -356,6 +379,10 @@ function App() {
   const [dragOverAgentId, setDragOverAgentId] = useState<string | null>(null);
   const [draggingWorkspaceId, setDraggingWorkspaceId] = useState<string | null>(null);
   const [dragOverWorkspaceId, setDragOverWorkspaceId] = useState<string | null>(null);
+
+  useEffect(() => {
+    void checkForProductionUpdate();
+  }, []);
 
   useEffect(() => {
     Promise.all([

@@ -30,5 +30,8 @@ jobs:
       - name: Build frontend
         run: bun run build
 
+      - name: Build sidecars
+        run: bun run build:sidecars
+
       - name: Check Tauri backend
         run: cargo check --manifest-path src-tauri/Cargo.toml
