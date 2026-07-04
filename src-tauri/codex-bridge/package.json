@@ -1,5 +1,5 @@
 {
-  "name": "claude-fleet-codex-bridge",
+  "name": "agent-space-codex-bridge",
   "private": true,
   "type": "module",
   "dependencies": {

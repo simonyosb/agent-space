@@ -1,6 +1,6 @@
 # Security Policy
 
-Claude Fleet is local-first software that starts terminals, runs user-installed CLIs, writes local state, and exposes a local MCP bridge. Please treat security issues seriously.
+AgentSpace is local-first software that starts terminals, runs user-installed CLIs, writes local state, and exposes a local MCP bridge. Please treat security issues seriously.
 
 ## Reporting a Vulnerability
 
@@ -21,8 +21,8 @@ Security-relevant areas include:
 
 - PTY spawning and environment construction
 - bundled helper binaries
-- `~/.claude-fleet` state and mailbox files
-- `/tmp/claude-fleet.sock`
+- `~/.agent-space` state and mailbox files
+- `/tmp/agent-space.sock`
 - MCP tool behavior
 - project directory handling
 

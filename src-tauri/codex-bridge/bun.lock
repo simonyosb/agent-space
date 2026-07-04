@@ -2,7 +2,7 @@
   "lockfileVersion": 1,
   "workspaces": {
     "": {
-      "name": "claude-fleet-codex-bridge",
+      "name": "agent-space-codex-bridge",
       "dependencies": {
         "@openai/codex-sdk": "^0.130.0",
       },

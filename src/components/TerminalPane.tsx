@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
@@ -15,8 +16,21 @@ type Props = {
   args?: string[];
   continueArgs?: string[];
   initialUseContinue?: boolean;
-  onSessionStarted?: () => void;
+  resumeSessionId?: string | null;
+  onTerminalStarted?: () => void;
+  onFreshRestart?: () => void;
   cwd?: string;
+};
+
+type SpawnPtyResult = {
+  id: string;
+  state: "attached" | "spawned" | "restarted" | "exited";
+  exited: boolean;
+};
+
+type ClaudeTranscriptProbe = {
+  sessionId: string | null;
+  sessionPath: string | null;
 };
 
 const hasTauriBridge = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -29,21 +43,51 @@ export function TerminalPane({
   args = [],
   continueArgs,
   initialUseContinue = false,
-  onSessionStarted,
+  resumeSessionId,
+  onTerminalStarted,
+  onFreshRestart,
   cwd,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  const onTerminalStartedRef = useRef(onTerminalStarted);
   const [exited, setExited] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const isPreview = !hasTauriBridge();
 
-  const spawn = async (useContinue: boolean) => {
+  useEffect(() => {
+    onTerminalStartedRef.current = onTerminalStarted;
+  }, [onTerminalStarted]);
+
+  const canResumeCurrentSession = async () => {
+    if (cmd !== "claude" || !cwd || !resumeSessionId) return true;
+    try {
+      const transcript = await invoke<ClaudeTranscriptProbe>("read_claude_transcript", {
+        cwd,
+        limit: 1,
+        sessionId: resumeSessionId,
+      });
+      return Boolean(transcript.sessionPath);
+    } catch {
+      return true;
+    }
+  };
+
+  const noteMissingResume = (term: Terminal) => {
+    if (cmd !== "claude" || !resumeSessionId) return;
+    term.write("\r\n\x1b[90m[resume session not found; starting a fresh Claude session]\x1b[0m\r\n");
+  };
+
+  const spawn = async (useContinue: boolean, restart = true) => {
     const term = termRef.current;
     if (!term) return;
-    const finalArgs = useContinue && continueArgs ? continueArgs : args;
+    const shouldUseContinue = useContinue && continueArgs ? await canResumeCurrentSession() : false;
+    if (useContinue && continueArgs && !shouldUseContinue) {
+      noteMissingResume(term);
+    }
+    const finalArgs = shouldUseContinue && continueArgs ? continueArgs : args;
     try {
-      await invoke("spawn_pty", {
+      const result = await invoke<SpawnPtyResult>("spawn_pty", {
         args: {
           id,
           agentId,
@@ -51,14 +95,15 @@ export function TerminalPane({
           cwd,
           cmd,
           args: finalArgs,
+          restart,
           cols: term.cols,
           rows: term.rows,
         },
       });
-      if (!useContinue) {
-        onSessionStarted?.();
+      if (!result.exited) {
+        onTerminalStartedRef.current?.();
       }
-      setExited(false);
+      setExited(result.exited);
     } catch (e) {
       term.write(`\r\n\x1b[31m[spawn failed: ${e}]\x1b[0m\r\n`);
     }
@@ -84,6 +129,7 @@ export function TerminalPane({
     termRef.current = term;
     const fit = new FitAddon();
     term.loadAddon(fit);
+    term.loadAddon(new WebLinksAddon());
     term.open(container);
 
     let fitFrame: number | null = null;
@@ -154,17 +200,24 @@ export function TerminalPane({
 
         if (disposed) return;
 
-        const initialArgs = initialUseContinue && continueArgs ? continueArgs : args;
-        await invoke("spawn_pty", {
-          args: { id, agentId, sessionScope, cwd, cmd, args: initialArgs, cols: term.cols, rows: term.rows },
+        const shouldUseContinue =
+          initialUseContinue && continueArgs ? await canResumeCurrentSession() : false;
+        if (initialUseContinue && continueArgs && !shouldUseContinue) {
+          noteMissingResume(term);
+        }
+        const initialArgs = shouldUseContinue && continueArgs ? continueArgs : args;
+        const result = await invoke<SpawnPtyResult>("spawn_pty", {
+          args: { id, agentId, sessionScope, cwd, cmd, args: initialArgs, restart: false, cols: term.cols, rows: term.rows },
         });
         spawned = true;
         lastPtySize = { cols: term.cols, rows: term.rows };
         setIsConnecting(false);
+        setExited(result.exited);
+        replayBuffer();
         window.setTimeout(replayBuffer, 250);
         window.setTimeout(replayBuffer, 1000);
-        if (!initialUseContinue) {
-          onSessionStarted?.();
+        if (!result.exited) {
+          onTerminalStartedRef.current?.();
         }
 
         term.onData((data) => {
@@ -209,7 +262,6 @@ export function TerminalPane({
       ro.disconnect();
       unlistenData?.();
       unlistenExit?.();
-      invoke("kill_pty", { id }).catch(() => {});
       term.dispose();
       termRef.current = null;
     };
@@ -223,7 +275,7 @@ export function TerminalPane({
         </div>
         <div className="preview-term-line">{cmd} session ready</div>
         <div className="preview-term-line muted">preview bridge active: desktop PTY starts inside Tauri</div>
-        <div className="preview-term-line">mailbox: ~/.claude-fleet/mail/agents/{id}/inbox</div>
+        <div className="preview-term-line">mailbox: dev profile inbox for {id}</div>
         <div className="preview-term-cursor" />
       </div>
     );
@@ -237,10 +289,19 @@ export function TerminalPane({
         <div className="exit-overlay">
           <div className="exit-msg">process exited</div>
           <div className="exit-actions">
-            <button className="btn" onClick={() => spawn(true)}>
+            <button className="btn" onClick={() => spawn(true, true)}>
               Restart (continue session)
             </button>
-            <button className="btn btn-secondary" onClick={() => spawn(false)}>
+            <button
+              className="btn btn-secondary"
+              onClick={() => {
+                if (onFreshRestart) {
+                  onFreshRestart();
+                  return;
+                }
+                void spawn(false);
+              }}
+            >
               Restart fresh
             </button>
           </div>

@@ -6,13 +6,13 @@ product
 
 ## Users
 
-Claude Fleet is for developers working across several local codebases at once, especially microservice or multi-repo systems where one model context cannot safely hold every project. The user is in an active engineering workflow: debugging, designing contracts, tracing ownership, asking cross-project questions, and deciding which project-local expert should answer.
+AgentSpace is for developers working across several local codebases at once, especially microservice or multi-repo systems where one model context cannot safely hold every project. The user is in an active engineering workflow: debugging, designing contracts, tracing ownership, asking cross-project questions, and deciding which project-local expert should answer.
 
 The core user is technical, impatient with ceremony, and comfortable with tmux, terminals, files, and explicit local state. They want visibility and control more than magic.
 
 ## Product Purpose
 
-Claude Fleet is a local context federation room. It keeps multiple long-lived Claude or Codex agents alive in separate tmux-backed project contexts, then lets those agents communicate through MCP messages and plain mailbox files.
+AgentSpace is a local context federation room. It keeps multiple long-lived Claude or Codex agents alive in separate tmux-backed project contexts, then lets those agents communicate through MCP messages and plain mailbox files.
 
 The product exists so knowledge can stay local to the project that owns it. Instead of stuffing many repositories into one context window, each agent investigates inside its own project and sends back only the useful conclusion, contract, risk, file reference, or decision.
 
@@ -26,7 +26,7 @@ The voice should feel like a capable local engineering tool: direct, calm, techn
 
 ## Anti-references
 
-This should not look or feel like a marketing landing page, a BridgeSpace-style workspace clone, a task-board product, or a hidden multi-agent framework with glossy abstractions over opaque behavior.
+This should not look or feel like a marketing landing page, an AgentSpace-style workspace clone, a task-board product, or a hidden multi-agent framework with glossy abstractions over opaque behavior.
 
 Avoid workflows centered on orchestrators, assigned tasks, review gates, swarms, role bureaucracy, or project-management theater. Avoid decorative dashboards that imply work is happening but hide the actual terminal, message, file, and agent state.
 

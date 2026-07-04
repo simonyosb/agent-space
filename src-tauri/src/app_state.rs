@@ -1,20 +1,21 @@
+use crate::runtime_profile;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-fn config_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude-fleet"))
-}
-
 fn state_path() -> Result<PathBuf, String> {
-    let dir = config_dir().ok_or_else(|| "HOME not set".to_string())?;
+    let dir = runtime_profile::config_dir().ok_or_else(|| "HOME not set".to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join("state.json"))
 }
 
+fn legacy_state_path() -> Option<PathBuf> {
+    runtime_profile::legacy_config_dir().map(|dir| dir.join("state.json"))
+}
+
 fn mailbox_root() -> Result<PathBuf, String> {
-    let dir = config_dir().ok_or_else(|| "HOME not set".to_string())?;
+    let dir = runtime_profile::config_dir().ok_or_else(|| "HOME not set".to_string())?;
     let root = dir.join("mail");
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     Ok(root)
@@ -145,6 +146,18 @@ pub struct TaskRecord {
     pub status: String,
     pub assignee: Option<String>,
     #[serde(default)]
+    pub source_message_id: Option<String>,
+    #[serde(default)]
+    pub linked_message_ids: Vec<String>,
+    #[serde(default)]
+    pub active_agent_ids: Vec<String>,
+    #[serde(default)]
+    pub last_agent_activity_at: Option<String>,
+    #[serde(default)]
+    pub subtasks: Vec<TaskSubtask>,
+    #[serde(default)]
+    pub issues: Vec<TaskIssue>,
+    #[serde(default)]
     pub role: Option<String>,
     #[serde(default)]
     pub owned_files: Vec<String>,
@@ -169,6 +182,33 @@ pub struct TaskComment {
     pub author: String,
     pub body: String,
     pub created_at: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskSubtask {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    pub created_by: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskIssue {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    pub severity: String,
+    pub status: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -204,6 +244,54 @@ pub struct RunRecord {
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AutomationTarget {
+    pub mode: String,
+    #[serde(default)]
+    pub agent_ids: Vec<String>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationSchedule {
+    pub kind: String,
+    #[serde(default)]
+    pub expression: Option<String>,
+    pub timezone: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationRecord {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub target: AutomationTarget,
+    pub prompt: String,
+    pub schedule: AutomationSchedule,
+    #[serde(default)]
+    pub attach_to_task_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationRunRecord {
+    pub id: String,
+    pub automation_id: String,
+    pub status: String,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+    #[serde(default)]
+    pub output_message_ids: Vec<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceRecord {
     pub id: String,
     pub agent_id: String,
@@ -226,6 +314,10 @@ pub struct RoomRecord {
     pub orchestrator_chat: Vec<ChatMessageRecord>,
     pub messages: Vec<MessageRecord>,
     pub runs: Vec<RunRecord>,
+    #[serde(default)]
+    pub automations: Vec<AutomationRecord>,
+    #[serde(default)]
+    pub automation_runs: Vec<AutomationRunRecord>,
     pub workspaces: Vec<WorkspaceRecord>,
     #[serde(default)]
     pub selected_agent_id: Option<String>,
@@ -242,6 +334,8 @@ pub struct FleetState {
     #[serde(default)]
     pub rooms: Vec<RoomRecord>,
     #[serde(default)]
+    pub room_order: Vec<String>,
+    #[serde(default)]
     pub active_workspace: Option<ProjectWorkspace>,
     #[serde(default)]
     pub main_agent_id: Option<String>,
@@ -251,14 +345,19 @@ pub struct FleetState {
     pub orchestrator_chat: Vec<ChatMessageRecord>,
     pub messages: Vec<MessageRecord>,
     pub runs: Vec<RunRecord>,
+    #[serde(default)]
+    pub automations: Vec<AutomationRecord>,
+    #[serde(default)]
+    pub automation_runs: Vec<AutomationRunRecord>,
     pub workspaces: Vec<WorkspaceRecord>,
 }
 
 fn default_state() -> FleetState {
     FleetState {
-        schema_version: 4,
+        schema_version: 5,
         active_room_id: None,
         rooms: vec![],
+        room_order: vec![],
         active_workspace: None,
         main_agent_id: None,
         agents: vec![],
@@ -266,6 +365,8 @@ fn default_state() -> FleetState {
         orchestrator_chat: vec![],
         messages: vec![],
         runs: vec![],
+        automations: vec![],
+        automation_runs: vec![],
         workspaces: vec![],
     }
 }
@@ -278,14 +379,32 @@ fn timestamp_id() -> String {
 }
 
 fn normalize_task_status(status: Option<&str>) -> String {
-    match status.unwrap_or("todo") {
-        "todo" => "todo".to_string(),
-        "in-progress" => "in-progress".to_string(),
-        "in-review" => "in-review".to_string(),
+    match status.unwrap_or("backlog") {
+        "todo" | "backlog" => "backlog".to_string(),
+        "in-progress" | "active" => "active".to_string(),
+        "in-review" | "review" => "review".to_string(),
         "blocked" => "blocked".to_string(),
         "complete" | "completed" => "done".to_string(),
         "done" => "done".to_string(),
-        _ => "todo".to_string(),
+        _ => "backlog".to_string(),
+    }
+}
+
+fn normalize_issue_severity(severity: Option<&str>) -> String {
+    match severity.unwrap_or("medium") {
+        "low" => "low".to_string(),
+        "medium" => "medium".to_string(),
+        "high" => "high".to_string(),
+        "critical" => "critical".to_string(),
+        _ => "medium".to_string(),
+    }
+}
+
+fn normalize_issue_status(status: Option<&str>) -> String {
+    match status.unwrap_or("open") {
+        "open" => "open".to_string(),
+        "resolved" | "closed" | "done" => "resolved".to_string(),
+        _ => "open".to_string(),
     }
 }
 
@@ -338,16 +457,17 @@ pub fn record_message(from: String, to: String, body: String) -> Result<MessageR
         created_at: timestamp,
     };
     write_mailbox_files(&message)?;
-    state.messages.insert(
-        0,
-        message.clone(),
-    );
+    state.messages.insert(0, message.clone());
     save_fleet_state(state)?;
     Ok(message)
 }
 
 #[tauri::command]
-pub fn record_manual_message(from: String, to: String, body: String) -> Result<MessageRecord, String> {
+pub fn record_manual_message(
+    from: String,
+    to: String,
+    body: String,
+) -> Result<MessageRecord, String> {
     record_message(from, to, body)
 }
 
@@ -412,6 +532,12 @@ pub fn list_tasks_for_mcp() -> Result<String, String> {
                 "body": task.body,
                 "status": task.status,
                 "assignee": task.assignee,
+                "sourceMessageId": task.source_message_id,
+                "linkedMessageIds": task.linked_message_ids,
+                "activeAgentIds": task.active_agent_ids,
+                "lastAgentActivityAt": task.last_agent_activity_at,
+                "subtasks": task.subtasks,
+                "issues": task.issues,
                 "role": task.role,
                 "ownedFiles": task.owned_files,
                 "acceptanceCriteria": task.acceptance_criteria,
@@ -420,6 +546,76 @@ pub fn list_tasks_for_mcp() -> Result<String, String> {
                 "swarmId": task.swarm_id,
                 "comments": task.comments,
                 "createdAt": task.created_at,
+                "updatedAt": task.updated_at,
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&tasks).map_err(|e| e.to_string())
+}
+
+pub fn search_tasks_for_mcp(
+    query: Option<String>,
+    status: Option<String>,
+    assignee: Option<String>,
+    include_done: bool,
+) -> Result<String, String> {
+    let state = load_fleet_state()?;
+    let query = query.unwrap_or_default().to_lowercase();
+    let status = status.map(|value| normalize_task_status(Some(&value)));
+    let tasks: Vec<_> = state
+        .tasks
+        .iter()
+        .filter(|task| include_done || task.status != "done")
+        .filter(|task| {
+            status
+                .as_ref()
+                .map(|expected| &task.status == expected)
+                .unwrap_or(true)
+        })
+        .filter(|task| {
+            assignee
+                .as_ref()
+                .map(|expected| task.assignee.as_deref() == Some(expected.as_str()))
+                .unwrap_or(true)
+        })
+        .filter(|task| {
+            if query.is_empty() {
+                return true;
+            }
+            let mut haystack = format!(
+                "{} {} {} {}",
+                task.id,
+                task.title,
+                task.body,
+                task.review_notes.clone().unwrap_or_default()
+            )
+            .to_lowercase();
+            for comment in &task.comments {
+                haystack.push(' ');
+                haystack.push_str(&comment.body.to_lowercase());
+            }
+            for subtask in &task.subtasks {
+                haystack.push(' ');
+                haystack.push_str(&subtask.title.to_lowercase());
+            }
+            for issue in &task.issues {
+                haystack.push(' ');
+                haystack.push_str(&issue.title.to_lowercase());
+                haystack.push(' ');
+                haystack.push_str(&issue.body.to_lowercase());
+            }
+            haystack.contains(&query)
+        })
+        .map(|task| {
+            serde_json::json!({
+                "id": task.id,
+                "title": task.title,
+                "body": task.body,
+                "status": task.status,
+                "assignee": task.assignee,
+                "subtasks": task.subtasks,
+                "issues": task.issues,
+                "commentCount": task.comments.len(),
                 "updatedAt": task.updated_at,
             })
         })
@@ -451,7 +647,13 @@ pub fn create_task_from_mcp(
         id: format!("task-{}", timestamp),
         title: title.trim().to_string(),
         body: body.unwrap_or_default(),
-        status: "todo".to_string(),
+        status: "backlog".to_string(),
+        source_message_id: None,
+        linked_message_ids: vec![],
+        active_agent_ids: assignee.clone().into_iter().collect(),
+        last_agent_activity_at: None,
+        subtasks: vec![],
+        issues: vec![],
         assignee,
         role,
         owned_files,
@@ -509,7 +711,14 @@ pub fn update_task_from_mcp(
         task.status = normalize_task_status(Some(&value));
     }
     if let Some(value) = assignee {
-        task.assignee = if value.is_empty() { None } else { Some(value) };
+        if value.is_empty() {
+            task.assignee = None;
+        } else {
+            if !task.active_agent_ids.contains(&value) {
+                task.active_agent_ids.push(value.clone());
+            }
+            task.assignee = Some(value);
+        }
     }
     if let Some(value) = role {
         task.role = if value.is_empty() { None } else { Some(value) };
@@ -534,7 +743,173 @@ pub fn update_task_from_mcp(
     Ok(format!("Updated task {}", task_id))
 }
 
-pub fn comment_task_from_mcp(task_id: String, body: String, author: String) -> Result<String, String> {
+pub fn create_subtask_from_mcp(
+    task_id: String,
+    title: String,
+    assignee: Option<String>,
+    author: String,
+) -> Result<String, String> {
+    let mut state = load_fleet_state()?;
+    if let Some(agent_id) = assignee.as_deref() {
+        if !agent_id.is_empty() && !state.agents.iter().any(|agent| agent.id == agent_id) {
+            return Err(format!("unknown assignee: {}", agent_id));
+        }
+    }
+
+    let task = state
+        .tasks
+        .iter_mut()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| format!("unknown task: {}", task_id))?;
+    let timestamp = timestamp_id();
+    let subtask = TaskSubtask {
+        id: format!("subtask-{}", timestamp),
+        title: title.trim().to_string(),
+        status: "backlog".to_string(),
+        assignee,
+        created_by: author.clone(),
+        created_at: timestamp.clone(),
+        updated_at: timestamp.clone(),
+    };
+    let id = subtask.id.clone();
+    task.subtasks.insert(0, subtask);
+    task.comments.insert(
+        0,
+        TaskComment {
+            id: format!("comment-subtask-{}", timestamp),
+            author,
+            body: format!("Created subtask {}", id),
+            created_at: timestamp.clone(),
+        },
+    );
+    task.updated_at = timestamp.clone();
+    save_fleet_state(state)?;
+    Ok(format!("Created subtask {} on {}", id, task_id))
+}
+
+pub fn update_subtask_from_mcp(
+    task_id: String,
+    subtask_id: String,
+    title: Option<String>,
+    status: Option<String>,
+    assignee: Option<String>,
+) -> Result<String, String> {
+    let mut state = load_fleet_state()?;
+    if let Some(agent_id) = assignee.as_deref() {
+        if !agent_id.is_empty() && !state.agents.iter().any(|agent| agent.id == agent_id) {
+            return Err(format!("unknown assignee: {}", agent_id));
+        }
+    }
+
+    let task = state
+        .tasks
+        .iter_mut()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| format!("unknown task: {}", task_id))?;
+    let subtask = task
+        .subtasks
+        .iter_mut()
+        .find(|subtask| subtask.id == subtask_id)
+        .ok_or_else(|| format!("unknown subtask: {}", subtask_id))?;
+    if let Some(value) = title {
+        subtask.title = value;
+    }
+    if let Some(value) = status {
+        subtask.status = normalize_task_status(Some(&value));
+    }
+    if let Some(value) = assignee {
+        subtask.assignee = if value.is_empty() { None } else { Some(value) };
+    }
+    let timestamp = timestamp_id();
+    subtask.updated_at = timestamp.clone();
+    task.updated_at = timestamp;
+    save_fleet_state(state)?;
+    Ok(format!("Updated subtask {} on {}", subtask_id, task_id))
+}
+
+pub fn create_issue_from_mcp(
+    task_id: String,
+    title: String,
+    body: Option<String>,
+    severity: Option<String>,
+    author: String,
+) -> Result<String, String> {
+    let mut state = load_fleet_state()?;
+    let task = state
+        .tasks
+        .iter_mut()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| format!("unknown task: {}", task_id))?;
+    let timestamp = timestamp_id();
+    let issue = TaskIssue {
+        id: format!("issue-{}", timestamp),
+        title: title.trim().to_string(),
+        body: body.unwrap_or_default(),
+        severity: normalize_issue_severity(severity.as_deref()),
+        status: "open".to_string(),
+        agent_id: Some(author.clone()),
+        created_at: timestamp.clone(),
+        updated_at: timestamp.clone(),
+    };
+    let id = issue.id.clone();
+    task.issues.insert(0, issue);
+    task.comments.insert(
+        0,
+        TaskComment {
+            id: format!("comment-issue-{}", timestamp),
+            author,
+            body: format!("Opened issue {}", id),
+            created_at: timestamp.clone(),
+        },
+    );
+    task.updated_at = timestamp.clone();
+    save_fleet_state(state)?;
+    Ok(format!("Created issue {} on {}", id, task_id))
+}
+
+pub fn update_issue_from_mcp(
+    task_id: String,
+    issue_id: String,
+    title: Option<String>,
+    body: Option<String>,
+    severity: Option<String>,
+    status: Option<String>,
+) -> Result<String, String> {
+    let mut state = load_fleet_state()?;
+    let task = state
+        .tasks
+        .iter_mut()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| format!("unknown task: {}", task_id))?;
+    let issue = task
+        .issues
+        .iter_mut()
+        .find(|issue| issue.id == issue_id)
+        .ok_or_else(|| format!("unknown issue: {}", issue_id))?;
+    if let Some(value) = title {
+        issue.title = value;
+    }
+    if let Some(value) = body {
+        issue.body = value;
+    }
+    if let Some(value) = severity {
+        issue.severity = normalize_issue_severity(Some(&value));
+    }
+    if let Some(value) = status {
+        issue.status = normalize_issue_status(Some(&value));
+    }
+    let timestamp = timestamp_id();
+    issue.updated_at = timestamp.clone();
+    task.updated_at = timestamp;
+    save_fleet_state(state)?;
+    Ok(format!("Updated issue {} on {}", issue_id, task_id))
+}
+
+pub fn comment_task_from_mcp(
+    task_id: String,
+    body: String,
+    author: String,
+) -> Result<String, String> {
     let mut state = load_fleet_state()?;
     let task = state
         .tasks
@@ -574,7 +949,9 @@ pub fn request_hire_agent_from_mcp(
         .find(|agent| agent.id == requested_by)
         .ok_or_else(|| format!("unknown requesting agent: {}", requested_by))?;
     if !requester.permissions.can_create_agents && requester.role != "orchestrator" {
-        return Err("only the orchestrator or agents with canCreateAgents can request hires".to_string());
+        return Err(
+            "only the orchestrator or agents with canCreateAgents can request hires".to_string(),
+        );
     }
     let manager_id = reports_to.unwrap_or_else(|| requested_by.clone());
     if !state.agents.iter().any(|agent| agent.id == manager_id) {
@@ -603,7 +980,10 @@ pub fn request_hire_agent_from_mcp(
         role,
         reports_to: Some(manager_id.clone()),
         capabilities,
-        cwd: state.active_workspace.as_ref().map(|workspace| workspace.path.clone()),
+        cwd: state
+            .active_workspace
+            .as_ref()
+            .map(|workspace| workspace.path.clone()),
         worktree: None,
         instructions: if trimmed_instructions.trim().is_empty() {
             None
@@ -651,6 +1031,15 @@ pub fn request_hire_agent_from_mcp(
 pub fn load_fleet_state() -> Result<FleetState, String> {
     let path = state_path()?;
     if !path.exists() {
+        if let Some(legacy_path) = legacy_state_path().filter(|candidate| candidate.exists()) {
+            let text = fs::read_to_string(&legacy_path).map_err(|e| e.to_string())?;
+            let mut state: FleetState = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            if state.main_agent_id.is_none() {
+                state.main_agent_id = state.agents.first().map(|agent| agent.id.clone());
+            }
+            save_fleet_state(state.clone())?;
+            return Ok(state);
+        }
         let state = default_state();
         save_fleet_state(state.clone())?;
         return Ok(state);
@@ -695,16 +1084,27 @@ pub fn open_project_workspace(path: String) -> Result<ProjectWorkspace, String> 
 }
 
 #[tauri::command]
-pub fn create_project_workspace(path: String, name: Option<String>) -> Result<ProjectWorkspace, String> {
+pub fn create_project_workspace(
+    path: String,
+    name: Option<String>,
+) -> Result<ProjectWorkspace, String> {
     let expanded = expand_home(path.trim());
     fs::create_dir_all(&expanded).map_err(|e| e.to_string())?;
     let canonical = expanded.canonicalize().map_err(|e| e.to_string())?;
     let workspace_name = name
         .and_then(|value| {
             let trimmed = value.trim().to_string();
-            if trimmed.is_empty() { None } else { Some(trimmed) }
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
         })
-        .or_else(|| canonical.file_name().map(|value| value.to_string_lossy().to_string()))
+        .or_else(|| {
+            canonical
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+        })
         .unwrap_or_else(|| "Workspace".to_string());
     Ok(ProjectWorkspace {
         id: format!("workspace-{}", timestamp_id()),
