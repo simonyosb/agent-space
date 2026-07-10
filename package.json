@@ -6,9 +6,11 @@
   "scripts": {
     "build:fleet-bins": "cargo build --manifest-path src-tauri/Cargo.toml --bin fleet-msg --bin fleet-mcp",
     "build:sidecars": "bash scripts/build-sidecars.sh",
+    "check:release": "node scripts/check-release.mjs",
     "dev": "vite --configLoader native",
     "build": "tsc && vite build --configLoader native",
     "preview": "vite preview",
+    "test:release": "node --test scripts/release-utils.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

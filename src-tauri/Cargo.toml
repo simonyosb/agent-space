@@ -1,8 +1,8 @@
 [package]
 name = "agent-space"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Local context federation for project-scoped coding agents"
+authors = ["AgentSpace contributors"]
 edition = "2021"
 default-run = "agent-space"
 

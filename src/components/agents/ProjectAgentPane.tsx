@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { systemPromptFor } from "../../agentPrompts";
 import { scopedAgentId, shortPath } from "../../bridgeUtils";
 import { runtimeAdapters } from "../../runtimeAdapters";
@@ -10,8 +10,6 @@ import type {
 } from "../../types";
 import { TerminalPane } from "../TerminalPane";
 import { AgentTranscriptChat } from "./AgentTranscriptChat";
-
-void React;
 
 export type AgentPaneSize = {
   width: number;

@@ -1,7 +1,4 @@
-import React from "react";
 import type { RoomRecord } from "../../types";
-
-void React;
 
 type Props = {
   rooms: RoomRecord[];

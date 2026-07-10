@@ -6,7 +6,7 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [react({ jsxRuntime: "classic" })],
+  plugins: [react()],
   optimizeDeps: {
     noDiscovery: true,
     include: ["react", "react-dom", "react-dom/client"],

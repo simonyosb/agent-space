@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-target=""
+target="${TAURI_ENV_TARGET_TRIPLE:-}"
 profile="release"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        echo "--target requires a Rust target triple" >&2
+        exit 2
+      fi
       target="${2:-}"
       shift 2
       ;;

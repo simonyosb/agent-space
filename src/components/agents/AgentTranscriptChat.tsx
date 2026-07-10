@@ -1,8 +1,6 @@
-import React, { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import type { AgentRecord, TranscriptMessageRecord } from "../../types";
-
-void React;
 
 type AgentTranscriptChatAgent = Pick<AgentRecord, "id" | "label" | "runtime" | "cwd" | "sessionId">;
 
@@ -105,10 +103,10 @@ function ChatMessageBody({ body }: { body: string }) {
             return (
               <p key={`${segmentIndex}-${blockIndex}`}>
                 {lines.map((line, lineIndex) => (
-                  <React.Fragment key={lineIndex}>
+                  <Fragment key={lineIndex}>
                     {lineIndex > 0 ? <br /> : null}
                     {renderInlineMarkdown(line.trim())}
-                  </React.Fragment>
+                  </Fragment>
                 ))}
               </p>
             );

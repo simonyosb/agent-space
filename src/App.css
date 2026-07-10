@@ -32,6 +32,8 @@
   --ring: #737373;
   --focus: rgba(115, 115, 115, 0.42);
   --radius: 10px;
+  --z-modal: 30;
+  --z-toast: 40;
   --font-sans: Geist, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", Menlo, monospace;
   color: var(--ink);
@@ -1701,7 +1703,7 @@ body.is-pane-dragging * {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 30;
+  z-index: var(--z-modal);
   display: grid;
   place-items: center;
   padding: 18px;
@@ -1789,6 +1791,136 @@ body.is-pane-dragging * {
 
 .modal-actions.edit-actions {
   grid-template-columns: 1fr 1fr 1fr;
+}
+
+.update-notice {
+  position: fixed;
+  inset-inline-end: 14px;
+  inset-block-end: 14px;
+  z-index: var(--z-toast);
+  display: grid;
+  gap: 12px;
+  width: min(390px, calc(100vw - 28px));
+  padding: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.34);
+  animation: update-notice-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.update-notice.is-error {
+  border-color: color-mix(in srgb, var(--danger), transparent 45%);
+}
+
+.update-notice-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.update-notice-heading > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.update-notice-heading strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.update-notice-heading span:not(.update-status-mark) {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.update-status-mark {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.update-notice.is-downloading .update-status-mark,
+.update-notice.is-installing .update-status-mark,
+.update-notice.is-restarting .update-status-mark {
+  background: var(--warning);
+}
+
+.update-notice.is-error .update-status-mark {
+  background: var(--danger);
+}
+
+.update-release-notes {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.update-progress {
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 3px;
+  background: var(--surface-3);
+  accent-color: var(--primary);
+}
+
+.update-progress::-webkit-progress-bar {
+  background: var(--surface-3);
+}
+
+.update-progress::-webkit-progress-value {
+  background: var(--primary);
+}
+
+.update-error-details {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.update-error-details summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.update-error-details code {
+  display: block;
+  max-height: 88px;
+  margin-top: 7px;
+  overflow: auto;
+  color: #f5b7b8;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.update-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@keyframes update-notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
 }
 
 .setup-shell {

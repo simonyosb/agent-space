@@ -1,6 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-
-void React;
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export type QuickOpenEntryKind = "room" | "agent" | "message" | "command";
 

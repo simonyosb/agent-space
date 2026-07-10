@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { systemPromptFor } from "./agentPrompts";
 import { formatTime, scopedAgentId, shortPath } from "./bridgeUtils";
 import { ProjectAgentPane, type AgentPaneSize } from "./components/agents/ProjectAgentPane";
 import { QuickOpen, QuickOpenEntry } from "./components/shell/QuickOpen";
+import { UpdateNotice } from "./components/shell/UpdateNotice";
+import { useAppUpdater } from "./hooks/useAppUpdater";
 import type {
   AgentPaneStatus,
   AgentRecord,
@@ -21,8 +23,6 @@ import type {
   TranscriptMessageRecord,
 } from "./types";
 import "./App.css";
-
-void React;
 
 const agentColors = [
   "#e5e5e5",
@@ -273,29 +273,6 @@ async function appInvoke<T>(cmd: string, args?: Record<string, unknown>): Promis
   }
 }
 
-async function checkForProductionUpdate() {
-  if (!hasTauriBridge() || import.meta.env.DEV) return;
-
-  try {
-    const [{ check }, { relaunch }] = await Promise.all([
-      import("@tauri-apps/plugin-updater"),
-      import("@tauri-apps/plugin-process"),
-    ]);
-    const update = await check();
-    if (!update) return;
-
-    const shouldInstall = window.confirm(
-      `AgentSpace ${update.version} is available. Install it and restart now?`,
-    );
-    if (!shouldInstall) return;
-
-    await update.downloadAndInstall();
-    await relaunch();
-  } catch (error) {
-    console.error("Failed to check for AgentSpace updates:", error);
-  }
-}
-
 const hasUsableSession = (agent: AgentRecord) => {
   if (agent.runtime === "codex") return agent.status === "session-started";
   return Boolean(agent.sessionId && agent.status === "session-started");
@@ -350,6 +327,7 @@ function createAgent({
 }
 
 function App() {
+  const updater = useAppUpdater(hasTauriBridge() && !import.meta.env.DEV);
   const [fleetState, setFleetState] = useState<FleetState | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [mcpConfigPath, setMcpConfigPath] = useState<string | null>(null);
@@ -379,10 +357,6 @@ function App() {
   const [dragOverAgentId, setDragOverAgentId] = useState<string | null>(null);
   const [draggingWorkspaceId, setDraggingWorkspaceId] = useState<string | null>(null);
   const [dragOverWorkspaceId, setDragOverWorkspaceId] = useState<string | null>(null);
-
-  useEffect(() => {
-    void checkForProductionUpdate();
-  }, []);
 
   useEffect(() => {
     Promise.all([
@@ -1395,6 +1369,12 @@ function App() {
         open={isQuickOpenOpen}
         entries={quickOpenEntries}
         onClose={() => setIsQuickOpenOpen(false)}
+      />
+      <UpdateNotice
+        state={updater.state}
+        onDismiss={updater.dismiss}
+        onInstall={() => void updater.install()}
+        onRetry={updater.retry}
       />
     </main>
   );

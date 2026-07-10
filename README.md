@@ -55,6 +55,7 @@ The expensive local investigation stays local. The useful conclusion crosses the
 - Runs a local Unix socket bus at `/tmp/agent-space.sock`.
 - Provides MCP tools for agent discovery and messaging.
 - Records messages to `~/.agent-space/mail`.
+- Ships signed macOS Apple Silicon releases with user-controlled in-app updates.
 
 ## Local Files
 
@@ -157,11 +158,14 @@ src-tauri/target/release/bundle/macos/AgentSpace.app
 
 The built macOS app adds common CLI locations such as `~/.local/bin`, `~/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`, and `/usr/local/bin` to the PTY `PATH` so agents can find locally installed CLIs when launched outside a shell.
 
+Maintainers can follow the production signing, notarization, updater, and smoke
+test process in [docs/RELEASE.md](docs/RELEASE.md).
+
 ## Current Caveats
 
-- This is early local-first tooling, not a polished hosted product.
+- This is local-first desktop tooling, not a hosted product.
 - The app is optimized for the developer's own machine and local CLIs.
-- DMG packaging may need more work; the app bundle build is the reliable target today.
+- Public macOS releases require an Apple Developer ID certificate and notarization credentials.
 - Some legacy task/orchestrator code still exists in the backend, but the current product direction is the simpler agent room: project-local terminals plus message passing.
 
 ## Philosophy
